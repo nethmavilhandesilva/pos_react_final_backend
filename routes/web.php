@@ -32,11 +32,6 @@ Route::middleware('auth')->group(function () {
 Route::get('/register', [RegisteredUserController::class, 'create'])
     ->middleware('guest')
     ->name('register');
-
-// Suppliers
-Route::resource('suppliers', SupplierController::class);
-
-
 // GRN
 Route::resource('grn', GrnEntryController::class) ->except(['show']);
 Route::post('/grn/store', [GrnEntryController::class, 'store'])->name('grn.store2');

@@ -1,6 +1,5 @@
 <?php
 
-// app/Http/Controllers/SupplierController.php
 namespace App\Http\Controllers;
 
 use App\Models\Supplier;
@@ -11,35 +10,31 @@ class SupplierController extends Controller
     public function index()
     {
         $suppliers = Supplier::all();
-        return view('dashboard.suppliers.index', compact('suppliers'));
+        return response()->json($suppliers);
     }
 
-    public function create()
+    public function store(Request $request)
     {
-        return view('dashboard.suppliers.create');
+        $request->validate([
+            'code'    => 'required|unique:suppliers',
+            'name'    => 'required',
+            'address' => 'required',
+        ]);
+
+        $data = $request->all();
+        $data['code'] = strtoupper($data['code']);
+
+        $supplier = Supplier::create($data);
+
+        return response()->json([
+            'message' => 'Supplier added successfully!',
+            'supplier' => $supplier
+        ], 201);
     }
 
-   public function store(Request $request)
-{
-    $request->validate([
-        'code'    => 'required|unique:suppliers',
-        'name'    => 'required',
-        'address' => 'required',
-    ]);
-
-    // Force 'code' to uppercase
-    $data = $request->all();
-    $data['code'] = strtoupper($data['code']);
-
-    Supplier::create($data);
-
-    return redirect()->route('suppliers.index')->with('success', 'Supplier added successfully!');
-}
-
-
-    public function edit(Supplier $supplier)
+    public function show(Supplier $supplier)
     {
-        return view('dashboard.suppliers.edit', compact('supplier'));
+        return response()->json($supplier);
     }
 
     public function update(Request $request, Supplier $supplier)
@@ -50,13 +45,30 @@ class SupplierController extends Controller
             'address' => 'required',
         ]);
 
-        $supplier->update($request->all());
-        return redirect()->route('suppliers.index')->with('success', 'Supplier updated successfully!');
+        $data = $request->all();
+        $data['code'] = strtoupper($data['code']);
+
+        $supplier->update($data);
+
+        return response()->json([
+            'message' => 'Supplier updated successfully!',
+            'supplier' => $supplier
+        ]);
     }
 
     public function destroy(Supplier $supplier)
     {
         $supplier->delete();
-        return redirect()->route('suppliers.index')->with('success', 'Supplier deleted successfully!');
+        return response()->json(['message' => 'Supplier deleted successfully!']);
+    }
+
+    public function search($query)
+    {
+        $suppliers = Supplier::where('code', 'LIKE', $query . '%')
+                    ->orWhere('name', 'LIKE', $query . '%')
+                    ->orWhere('address', 'LIKE', '%' . $query . '%')
+                    ->get();
+        
+        return response()->json($suppliers);
     }
 }
