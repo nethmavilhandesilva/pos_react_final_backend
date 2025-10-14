@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\ItemController;
 use App\Http\Controllers\SupplierController;
+use App\Http\Controllers\GrnEntryController;
 
 //CUSTOMERS
 Route::get('/customers', [CustomerController::class, 'apiIndex']);
@@ -16,3 +17,11 @@ Route::get('items/search/{query}', [ItemController::class, 'search']);
 // API Routes for Suppliers
 Route::apiResource('suppliers', SupplierController::class);
 Route::get('suppliers/search/{query}', [SupplierController::class, 'search']);
+// GRN Entry API Routes
+// GRN Entry API Routes
+Route::get('/grn-entries', [GrnEntryController::class, 'index']);
+Route::get('/grn-entries/create-data', [GrnEntryController::class, 'createData']);
+Route::post('/grn-entries', [GrnEntryController::class, 'store']);
+Route::get('/grn-entries/{id}', [GrnEntryController::class, 'show']);
+Route::put('/grn-entries/{id}', [GrnEntryController::class, 'update']);
+Route::delete('/grn-entries/{id}', [GrnEntryController::class, 'destroy']);

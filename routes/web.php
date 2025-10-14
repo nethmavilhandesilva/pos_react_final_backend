@@ -32,15 +32,7 @@ Route::middleware('auth')->group(function () {
 Route::get('/register', [RegisteredUserController::class, 'create'])
     ->middleware('guest')
     ->name('register');
-// GRN
-Route::resource('grn', GrnEntryController::class) ->except(['show']);
-Route::post('/grn/store', [GrnEntryController::class, 'store'])->name('grn.store2');
-Route::get('api/grn-entry/{code}', [GrnEntryController::class, 'getGrnEntryByCode']);
-Route::get('/grn-used-data/{code}', [GrnEntryController::class, 'getUsedData']);
-Route::post('/grn/{id}/hide', [GrnEntryController::class, 'hide'])->name('grn.hide');
-Route::post('/grn/{id}/unhide', [GrnEntryController::class, 'unhide'])->name('grn.unhide');
-Route::post('/grn-damages', [GrnEntryController::class, 'Damagestore'])->name('grn-damages.store');
-Route::get('/grn-entries/latest', [GrnEntryController::class, 'getLatestEntries']);
+
 
 
 // Sales
@@ -130,7 +122,7 @@ Route::get('/grn/export/excel', [ReportController::class, 'exportExcel'])->name(
 Route::get('/reports/cheque-payments', [ReportController::class, 'chequePaymentsReport']) ->name('reports.cheque-payments');
 Route::post('/reports/update-status/{id}', [ReportController::class, 'updateStatus'])  ->name('reports.update-status');
 Route::get('/generate-report', [ReportController::class, 'generateReport']) ->name('generate.report');//returns
-Route::get('/grn-entry/{code}/remaining', [App\Http\Controllers\GrnEntryController::class, 'getRemaining']);
+
 //returns
 Route::get('/api/grn-entry/{code}', function ($code) {
     $entry = \App\Models\GrnEntry::where('code', $code)->first();
@@ -147,9 +139,9 @@ Route::get('/api/all-bill-nos', function () {
     return response()->json($allBillNos);
 });
 //GRN OPTIONS
-Route::post('/grn/update-status/{id}', [GrnEntryController::class, 'updateStatus'])->name('grn.updateStatus');
+
 // web.php
-Route::get('/grn-entry/{code}', [GrnEntryController::class, 'getGrnEntry'])->name('grn.entry.fetch');
+
 Route::post('/settings/update-balance', [SalesEntryController::class, 'updateBalance'])->name('settings.updateBalance');
 //sowin ip address
 Route::get('/get-user-ip/{user_id}', function ($user_id) {
@@ -159,22 +151,14 @@ Route::get('/get-user-ip/{user_id}', function ($user_id) {
     ]);
 })->name('get-user-ip');
 // Dedicated GRN delete route
-Route::delete('/grn/delete/{id}', [GrnEntryController::class, 'destroy'])->name('grn.delete');
+
 //new  GRN TABLE
-Route::post('/grn/store2', [GrnEntryController::class, 'store2'])->name('grn.store3');
-Route::get('/grn/update/form', [GrnEntryController::class, 'showupdateform'])->name('grn.updateform'); // page with form + table
-//new  GRN PDFS FOR UPDATE GRN
-Route::post('grn/export/update/excel', [GrnEntryController::class, 'exportUPDATEExcel'])->name('grn.export.excel');
-Route::post('grn/export/update/pdf', [GrnEntryController::class, 'exportUPDATEPdf'])->name('grn.export.pdf');
 
-Route::delete('/grn/delete/update/{id}', [GrnEntryController::class, 'destroyupdate'])->name('grnupdate.delete');
 
-//new  Gettin te real time balances for update grn page
-Route::get('/grn/balance/{code}', [GrnEntryController::class, 'getBalance'])->name('grn.balance');
 
 //new react dashboard
 Route::get('/sales-entry/react', [DashboardController::class, 'index'])->name('dasboard.index'); // page that shows React app
-Route::post('/grn/react', [GrnEntryController::class, 'store'])->name('grn.store2'); // existing store handler (JSON)
+
 //given amount
 Route::put('/sales/{sale}/given-amount', [SalesEntryController::class, 'updateGivenAmount'])->name('sales.update-given-amount');
 
