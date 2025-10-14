@@ -1,60 +1,58 @@
 <?php
 
-// app/Http/Controllers/CustomerController.php
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Controller;
 use App\Models\Customer;
 use Illuminate\Http\Request;
 
 class CustomerController extends Controller
 {
-    public function index()
-    {
-        $customers = Customer::all();
-        return view('dashboard.customers.index', compact('customers'));
+    // app/Http/Controllers/CustomerController.php
+
+public function apiIndex()
+{
+    return response()->json(Customer::all());
+}
+
+public function apiStore(Request $request)
+{
+    $data = $request->validate([
+        'short_name' => 'nullable|string',
+        'name' => 'nullable|string',
+        'ID_NO' => 'nullable|string',
+        'telephone_no' => 'nullable|string',
+        'address' => 'nullable|string',
+        'credit_limit' => 'nullable|numeric',
+    ]);
+
+    if (!empty($data['short_name'])) {
+        $data['short_name'] = strtoupper($data['short_name']);
     }
 
-    public function create()
-    {
-        return view('dashboard.customers.create');
-    }
+    $customer = Customer::create($data);
+    return response()->json($customer, 201);
+}
 
-    public function store(Request $request)
-    {
-        $request->validate([
-            'short_name'=>'nullable',
-            'ID_NO' => 'nullable',
-            'name' => 'nullable',
-            'telephone_no' => 'nullable',
-            'credit_limit' => 'nullable',
-        ]);
+public function apiUpdate(Request $request, Customer $customer)
+{
+    $data = $request->validate([
+        'short_name' => 'nullable|string',
+        'name' => 'nullable|string',
+        'ID_NO' => 'nullable|string',
+        'telephone_no' => 'nullable|string',
+        'address' => 'nullable|string',
+        'credit_limit' => 'nullable|numeric',
+    ]);
 
-        Customer::create($request->all());
-        return redirect()->route('customers.index')->with('success', 'Customer added successfully.');
-    }
+    $customer->update($data);
+    return response()->json($customer);
+}
 
-    public function edit(Customer $customer)
-    {
-        return view('dashboard.customers.edit', compact('customer'));
-    }
+public function apiDestroy(Customer $customer)
+{
+    $customer->delete();
+    return response()->json(['message' => 'Deleted successfully']);
+}
 
-    public function update(Request $request, Customer $customer)
-    {
-        $request->validate([
-            'short_name'=>'required',
-            'name' => 'required',
-            'telephone_no' => 'nullable',
-             'ID_NO' => 'nullable',
-            'credit_limit' => 'required|numeric',
-        ]);
-
-        $customer->update($request->all());
-        return redirect()->route('customers.index')->with('success', 'Customer updated successfully.');
-    }
-
-    public function destroy(Customer $customer)
-    {
-        $customer->delete();
-        return redirect()->route('customers.index')->with('success', 'Customer deleted successfully.');
-    }
 }

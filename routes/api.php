@@ -1,20 +1,9 @@
 <?php
-
-use App\Http\Controllers\DashboardController;
-use App\Http\Controllers\GrnEntryController;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\CustomerController;
-use App\Http\Controllers\SalesEntryController;
 
-Route::middleware(['auth:sanctum'])->group(function () { // or 'auth:api' depending on your setup
-    // Dashboard initial data
-    Route::get('/dashboard/initial-data', [DashboardController::class, 'getInitialData']);
-    
-    // GRN data
-    Route::get('/grn-entry/{code}', [GrnEntryController::class, 'getGRNData']);
-    
-    // Customer loan amount
-    Route::post('/customer/loan-amount', [CustomerController::class, 'getLoanAmount']);
-    
-    // Sales data
-    Route::get('/sales', [SalesEntryController::class, 'create']);
-});
+Route::get('/customers', [CustomerController::class, 'apiIndex']);
+Route::post('/customers', [CustomerController::class, 'apiStore']);
+Route::put('/customers/{customer}', [CustomerController::class, 'apiUpdate']);
+Route::delete('/customers/{customer}', [CustomerController::class, 'apiDestroy']);

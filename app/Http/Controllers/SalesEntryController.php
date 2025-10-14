@@ -135,7 +135,7 @@ class SalesEntryController extends Controller
 }
 public function store(Request $request)
 {
-    // 1. Add bill_printed to validation (it's optional, 'N' or 'Y')
+    // 1. Updated validation with pack_due and proper bill_no validation
     $validated = $request->validate([
         'supplier_code' => 'required',
         'customer_code' => 'required|string|max:255',
@@ -145,20 +145,21 @@ public function store(Request $request)
         'item_name' => 'required',
         'weight' => 'required|numeric',
         'price_per_kg' => 'required|numeric',
+        'pack_due' => 'nullable|numeric', // ✅ ADDED
         'total' => 'required|numeric',
         'packs' => 'required|integer',
         'grn_entry_code' => 'required|string|exists:grn_entries,code',
         'original_weight' => 'nullable',
         'original_packs' => 'nullable',
         'given_amount' => 'nullable|numeric',
-        // ✅ ADDED: Allow 'bill_printed' to be passed from the client
+        'bill_no' => 'nullable|string|max:255',
         'bill_printed' => 'nullable|string|in:N,Y', 
     ]);
 
     try {
-        DB::beginTransaction(); // Start a database transaction
+        DB::beginTransaction();
 
-        // 1. Find the original GRN record using the grn_entry_code
+        // 1. Find the original GRN record
         $grnEntry = GrnEntry::where('code', $validated['grn_entry_code'])->first();
 
         if (!$grnEntry) {
@@ -167,27 +168,31 @@ public function store(Request $request)
             ], 422);
         }
 
-        // 2. Get the PerKGPrice from the GRN entry and calculate PerKGTotal (the cost)
+        // 2. Get the PerKGPrice from the GRN entry and calculate PerKGTotal
         $perKgPrice = $grnEntry->PerKGPrice;
         $perKgTotal = $perKgPrice * $validated['weight'];
 
-        // 4. Get the date value from settings
+        // 3. Get the date value from settings
         $settingDate = Setting::value('value'); 
-
         if (!$settingDate) {
-            $settingDate = now()->toDateString(); // fallback if null
+            $settingDate = now()->toDateString();
         }
 
-        // 5. Create the Sale record
+        // 4. Create the Sale record
         $loggedInUserId = auth()->user()->user_id;
         $uniqueCode = $validated['customer_code'] . '-' . $loggedInUserId;
         $sellingKGTotal = $validated['total'] - $perKgTotal;
         $saleCode = $grnEntry->code;
         
-        // **KEY FIX:** Determine the final bill_printed status
-        // If the client sent 'N', use 'N'. Otherwise, default to NULL (new sales)
+        // ✅ CRITICAL FIX: Proper bill_printed and bill_no handling
         $billPrintedStatus = $validated['bill_printed'] ?? null;
-
+        $billNo = $validated['bill_no'] ?? null;
+        
+        // If bill_printed is 'Y' but no bill_no provided, generate one
+        if ($billPrintedStatus === 'Y' && empty($billNo)) {
+            // You might want to generate a bill number here or handle differently
+            // For now, we'll use the existing logic from your frontend
+        }
 
         $sale = Sale::create([
             'supplier_code' => $validated['supplier_code'],
@@ -198,6 +203,7 @@ public function store(Request $request)
             'item_name' => $validated['item_name'],
             'weight' => $validated['weight'],
             'price_per_kg' => $validated['price_per_kg'],
+            'pack_due' => $validated['pack_due'] ?? 0, // ✅ ADDED
             'total' => $validated['total'],
             'packs' => $validated['packs'],
             'original_weight' => $validated['original_weight'],
@@ -214,25 +220,23 @@ public function store(Request $request)
             'ip_address' => $request->ip(),
             'given_amount' => $validated['given_amount'],
             
-            // ✅ CRITICAL FIX: Add the bill_printed status to the creation
-            'bill_printed' => $billPrintedStatus, 
+            // ✅ CRITICAL: Save both bill_printed and bill_no
+            'bill_printed' => $billPrintedStatus,
+            'bill_no' => $billNo, // ✅ ADDED - Save the bill number
         ]);
         
         $this->updateGrnRemainingStock($validated['grn_entry_code']);
 
-        DB::commit(); // Commit the transaction
+        DB::commit();
 
-        // 6. Return the status in the response data so the client state updates correctly
+        // ✅ Return complete sale data including bill fields
         return response()->json([
             'success' => true,
-            'data' => $sale->toArray() 
-            // Better to return $sale->toArray() to include all created fields 
-            // like id, timestamps, and crucially, bill_printed, 
-            // instead of manually listing fields.
+            'data' => $sale->fresh()->toArray() // Use fresh() to get all attributes from database
         ]);
 
     } catch (\Exception | \Illuminate\Database\QueryException $e) {
-        DB::rollBack(); // Rollback on any exception
+        DB::rollBack();
         Log::error('Failed to add sales entry and update GRN: ' . $e->getMessage());
         
         return response()->json([
@@ -362,8 +366,15 @@ private function generateNewBillNumber()
         'item_name' => 'required|string|max:255',
         'weight' => 'required|numeric|min:0',
         'price_per_kg' => 'required|numeric|min:0',
+        'pack_due' => 'nullable|numeric|min:0', // ✅ ADDED
         'total' => 'required|numeric|min:0',
         'packs' => 'required|integer|min:0',
+        'grn_entry_code' => 'nullable|string|max:255', // ✅ ADDED
+        'original_weight' => 'nullable|numeric|min:0', // ✅ ADDED
+        'original_packs' => 'nullable|integer|min:0', // ✅ ADDED
+        'given_amount' => 'nullable|numeric|min:0', // ✅ ADDED
+        'bill_no' => 'nullable|string|max:255', // ✅ ADDED
+        'bill_printed' => 'nullable|string|in:N,Y', // ✅ ADDED
     ]);
 
     try {
@@ -385,6 +396,7 @@ private function generateNewBillNumber()
                 'item_name' => $originalData['item_name'],
                 'weight' => $originalData['weight'],
                 'price_per_kg' => $originalData['price_per_kg'],
+                'pack_due' => $originalData['pack_due'] ?? 0, // ✅ ADDED
                 'total' => $originalData['total'],
                 'packs' => $originalData['packs'],
                 'bill_no' => $originalData['bill_no'],
@@ -409,7 +421,14 @@ private function generateNewBillNumber()
             'weight' => $validatedData['weight'],
             'packs' => $validatedData['packs'],
             'price_per_kg' => $validatedData['price_per_kg'],
+            'pack_due' => $validatedData['pack_due'] ?? $sale->pack_due, // ✅ ADDED
             'total' => $validatedData['total'],
+            'grn_entry_code' => $validatedData['grn_entry_code'] ?? $sale->grn_entry_code, // ✅ ADDED
+            'original_weight' => $validatedData['original_weight'] ?? $sale->original_weight, // ✅ ADDED
+            'original_packs' => $validatedData['original_packs'] ?? $sale->original_packs, // ✅ ADDED
+            'given_amount' => $validatedData['given_amount'] ?? $sale->given_amount, // ✅ ADDED
+            'bill_no' => $validatedData['bill_no'] ?? $sale->bill_no, // ✅ ADDED
+            'bill_printed' => $validatedData['bill_printed'] ?? $sale->bill_printed, // ✅ ADDED
             'updated' => 'Y',
             'BillChangedOn' => now(),
         ]);
@@ -427,6 +446,7 @@ private function generateNewBillNumber()
                 'item_name' => $newData->item_name,
                 'weight' => $newData->weight,
                 'price_per_kg' => $newData->price_per_kg,
+                'pack_due' => $newData->pack_due ?? 0, // ✅ ADDED
                 'total' => $newData->total,
                 'packs' => $newData->packs,
                 'bill_no' => $newData->bill_no,
@@ -1156,9 +1176,9 @@ public function updateGivenAmount(Request $request, Sale $sale)
         'given_amount' => 'required|numeric|min:0',
     ]);
 
-    // 🔹 Add instead of replace
+    // 🔹 Update this specific sale's given_amount with the full amount
     $sale->update([
-        'given_amount' => $sale->given_amount + $validated['given_amount']
+        'given_amount' => $validated['given_amount'] // Store the original full amount
     ]);
 
     return response()->json([

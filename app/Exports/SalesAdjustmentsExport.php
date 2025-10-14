@@ -3,6 +3,7 @@
 namespace App\Exports;
 
 use App\Models\Salesadjustment;
+use App\Models\Setting;
 use Maatwebsite\Excel\Concerns\FromCollection;
 use Maatwebsite\Excel\Concerns\WithHeadings;
 
@@ -11,12 +12,14 @@ class SalesAdjustmentsExport implements FromCollection, WithHeadings
     protected $code;
     protected $startDate;
     protected $endDate;
+    protected $settingDate;
 
-    public function __construct($code, $startDate, $endDate)
+    public function __construct($code, $startDate, $endDate, $settingDate = null)
     {
         $this->code = $code;
         $this->startDate = $startDate;
         $this->endDate = $endDate;
+        $this->settingDate = $settingDate;
     }
 
     public function collection()
@@ -33,19 +36,26 @@ class SalesAdjustmentsExport implements FromCollection, WithHeadings
             $query->whereDate('created_at', '<=', $this->endDate);
         }
 
-        // Fetch the data and order it by creation date
+        // ✅ Apply the setting date filter (same as PDF logic)
+        if ($this->settingDate) {
+            $query->whereDate('Date', $this->settingDate);
+        } else {
+            $defaultDate = Setting::value('value') ?? now()->toDateString();
+            $query->whereDate('Date', $defaultDate);
+        }
+
+        // Fetch the filtered data
         $entries = $query->orderBy('created_at', 'desc')->get();
 
-        // Map the collection to format the data for the Excel file,
-        // ensuring the columns match the headings.
+        // ✅ Map data for Excel
         return $entries->map(function ($entry) {
             $date = $entry->created_at->timezone('Asia/Colombo')->format('Y-m-d H:i');
-            if ($entry->type == 'original') {
+            if ($entry->type === 'original' && $entry->original_created_at) {
                 $date = \Carbon\Carbon::parse($entry->original_created_at)
                     ->timezone('Asia/Colombo')
                     ->format('Y-m-d H:i');
             }
-            
+
             return [
                 'විකුණුම්කරු' => $entry->code,
                 'මලු' => $entry->packs,
@@ -72,7 +82,7 @@ class SalesAdjustmentsExport implements FromCollection, WithHeadings
             'මුළු මුදල',
             'බිල්පත් අංකය',
             'පාරිභෝගික කේතය',
-            'වර්ගය (type)',
+            'වර්ගය',
             'දිනය සහ වේලාව',
         ];
     }

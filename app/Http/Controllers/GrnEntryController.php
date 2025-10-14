@@ -657,12 +657,40 @@ public function getBalance($code)
         'total_weight' => $totals->total_weight ?? 0,
     ]);
 }
+public function getLatestEntries(Request $request)
+    {
+        try {
+            // Get all GRN entries with latest data, ordered by date
+            $entries = GrnEntry::orderBy('txn_date', 'desc')
+                ->get()
+                ->map(function ($entry) {
+                    return [
+                        'code' => $entry->code,
+                        'item_name' => $entry->item_name,
+                        'supplier_code' => $entry->supplier_code,
+                        'item_code' => $entry->item_code,
+                        'price_per_kg' => $entry->price_per_kg,
+                        'PerKGPrice' => $entry->PerKGPrice,
+                        'SalesKGPrice' => $entry->SalesKGPrice,
+                        'weight' => $entry->weight, // Real-time weight
+                        'packs' => $entry->packs,   // Real-time packs
+                        'original_weight' => $entry->original_weight,
+                        'original_packs' => $entry->original_packs,
+                    ];
+                });
 
+            return response()->json([
+                'success' => true,
+                'entries' => $entries
+            ]);
 
-
-
-
-
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch GRN entries: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 
 }
 

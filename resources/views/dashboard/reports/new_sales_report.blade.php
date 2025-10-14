@@ -1,5 +1,4 @@
-{{-- resources/views/reports/sales_bill_summary.blade.php --}}
-
+{{-- resources/views/dashboard/reports/new_sales_report.blade.php --}}
 @extends('layouts.app')
 
 @section('content')
@@ -67,7 +66,7 @@ use Illuminate\Support\Str;
         {{-- Report Header --}}
         <div class="report-title-bar">
             <h2 class="company-name">Sales Report</h2>
-            <h4 class="fw-bold">Bill Summary</h4>
+            <h4 class="fw-bold">Processed Sales Summary</h4>
 
             @php $settingDate = \App\Models\Setting::value('value'); @endphp
             <div class="right-info">
@@ -78,24 +77,41 @@ use Illuminate\Support\Str;
         </div>
 
         <div class="card-body p-0">
-            @if ($salesByBill->isEmpty())
-                <div class="alert alert-info m-3">No sales records found.</div>
+            @if ($salesData->isEmpty())
+                <div class="alert alert-info m-3">No processed sales records found.</div>
             @else
-                @php $grandTotal = 0; @endphp
+                @php 
+                    $groupedData = $salesData->groupBy(function($sale) {
+                        return $sale->bill_no ?: $sale->customer_code;
+                    });
+                    $grandTotal = 0;
+                @endphp
 
-                @foreach ($salesByBill as $billNo => $sales)
+                @foreach ($groupedData as $groupKey => $sales)
                     @php
+                        $isBill = !empty($sales->first()->bill_no);
+                        $billTotal = $sales->sum(function($sale) {
+    return $sale->weight * $sale->price_per_kg;
+});
+
+                        $billTotal2 = $sales->sum('total');
                         $firstPrinted = $sales->first()->FirstTimeBillPrintedOn ?? null;
                         $reprinted = $sales->first()->BillReprintAfterchanges ?? null;
-                        $billTotal = $sales->sum('total');
                     @endphp
 
-                    {{-- Bill Header with Customer Code --}}
+                    {{-- Header Section --}}
                     <div class="mb-2 d-flex justify-content-between align-items-center">
                         <h5 class="fw-bold mb-1">
-                            Bill No: {{ $billNo }}
-                            <span class="ms-3 text-white">Customer Code: {{ $sales->first()->customer_code ?? '-' }}</span>
+                            @if ($isBill)
+                                Bill No: {{ $sales->first()->bill_no }}
+                                <span class="ms-3 text-white">
+                                    Customer Code: {{ $sales->first()->customer_code ?? '-' }}
+                                </span>
+                            @else
+                                Customer Code: {{ $sales->first()->customer_code ?? '-' }}
+                            @endif
                         </h5>
+                        @if ($isBill)
                         <div class="right-info">
                             @if($firstPrinted)
                                 <span>First Printed: {{ \Carbon\Carbon::parse($firstPrinted)->format('Y-m-d') }}</span>
@@ -104,9 +120,10 @@ use Illuminate\Support\Str;
                                 <span>Reprinted: {{ \Carbon\Carbon::parse($reprinted)->format('Y-m-d') }}</span>
                             @endif
                         </div>
+                        @endif
                     </div>
 
-                    {{-- Bill Table --}}
+                    {{-- Sales Table --}}
                     <table class="table table-bordered table-striped table-hover table-sm mb-3">
                         <thead class="text-center">
                             <tr>
@@ -118,40 +135,38 @@ use Illuminate\Support\Str;
                                 <th>එකතුව</th>
                             </tr>
                         </thead>
-                    <tbody>
-    @foreach ($sales as $sale)
-        @php
-            // Find GRN price for this code (normalize by trimming)
-            $grn = \App\Models\GrnEntry::where('code', trim($sale->code))->first();
-            $grnPrice = $grn ? (float) $grn->PerKGPrice : null;
-            $isLower = $grnPrice !== null && $sale->price_per_kg < $grnPrice;
-        @endphp
-
-        <tr class="text-center">
-            <td>{{ $sale->code }}</td>
-            <td class="text-start">{{ $sale->item_name }}</td>
-            <td>{{ number_format($sale->weight, 2) }}</td>
-
-            {{-- Highlight in red if sale price < GRN price --}}
-            <td style="{{ $isLower ? 'color:red; font-weight:bold;' : '' }}">
-                {{ number_format($sale->price_per_kg, 2) }}
-            </td>
-
-            <td>{{ $sale->packs }}</td>
-            <td>{{ number_format($sale->total, 2) }}</td>
-        </tr>
-    @endforeach
-</tbody>
-
+                        <tbody>
+                            @foreach ($sales as $sale)
+                                @php
+                                    $grn = \App\Models\GrnEntry::where('code', trim($sale->code))->first();
+                                    $grnPrice = $grn ? (float) $grn->PerKGPrice : null;
+                                    $isLower = $grnPrice !== null && $sale->price_per_kg < $grnPrice;
+                                @endphp
+                                <tr class="text-center">
+                                    <td>{{ $sale->code }}</td>
+                                    <td class="text-start">{{ $sale->item_name }}</td>
+                                    <td>{{ number_format($sale->weight, 2) }}</td>
+                                    <td style="{{ $isLower ? 'color:red; font-weight:bold;' : '' }}">
+                                        {{ number_format($sale->price_per_kg, 2) }}
+                                    </td>
+                                    <td>{{ $sale->packs }}</td>
+                                    <td>{{ number_format($sale->weight*$sale->price_per_kg, 2) }}</td>
+                                </tr>
+                            @endforeach
+                        </tbody>
                         <tfoot>
                             <tr class="fw-bold text-center">
-                                <td colspan="5" class="text-end">Bill Total:</td>
+                                <td colspan="5" class="text-end">Total:</td>
                                 <td>{{ number_format($billTotal, 2) }}</td>
+                            </tr>
+                             <tr class="fw-bold text-center">
+                                <td colspan="5" class="text-end">Total with Pack Cost:</td>
+                                <td>{{ number_format($billTotal2, 2) }}</td>
                             </tr>
                         </tfoot>
                     </table>
 
-                    @php $grandTotal += $billTotal; @endphp
+                    @php $grandTotal += $billTotal2; @endphp
                 @endforeach
 
                 {{-- Grand Total --}}

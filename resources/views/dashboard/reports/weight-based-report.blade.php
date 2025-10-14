@@ -192,7 +192,7 @@
                         <td>{{ $sale->packs }}</td>
                       
                         <td>{{ number_format($pack_due_cost, 2) }}</td>
-                        <td>{{ number_format($sale->total, 2) }}</td>
+                        <td>{{ number_format($sale->total-$pack_due_cost, 2) }}</td>
                     </tr>
                 @empty
                     <tr>
@@ -207,7 +207,7 @@
         <td class="text-end">{{ number_format($total_weight, 2) }}</td>
         <td class="text-end">{{ $total_packs }}</td>
         <td class="text-end">{{ number_format($total_pack_due_cost, 2) }}</td>
-        <td class="text-end">{{ number_format($total_amount, 2) }}</td>
+        <td class="text-end">{{ number_format($total_amount-$total_pack_due_cost, 2) }}</td>
     </tr>
 
     {{-- Divider row for clarity --}}
@@ -222,7 +222,7 @@
         <td class="text-end" colspan="4"></td>
         <td class="text-end">අවසන් මුළු එකතුව:</td>
         <td class="text-end">
-            {{ number_format($total_pack_due_cost + $total_amount, 2) }}
+            {{ number_format($total_pack_due_cost + $total_amount-$total_pack_due_cost, 2) }}
         </td>
     </tr>
 </tfoot>

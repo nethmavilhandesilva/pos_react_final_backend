@@ -128,8 +128,8 @@
         @php
             $originalPacks = floatval($data['original_packs'] ?? 0);
             $originalWeight = floatval($data['original_weight'] ?? 0);
-            $soldPacks = floatval($data['totalSoldpacks'] ?? 0);
-            $soldWeight = floatval($data['totalSoldWeight'] ?? 0);
+            $soldPacks = floatval($data['sold_packs'] ?? 0);
+            $soldWeight = floatval($data['sold_weight'] ?? 0);
             $remainingPacks = floatval($data['remaining_packs'] ?? 0);
             $remainingWeight = floatval($data['remaining_weight'] ?? 0);
             $salesValue = floatval($data['total_sales_value'] ?? 0);
@@ -150,11 +150,10 @@
             <td>{{ number_format($soldPacks) }}</td>
             <td>{{ number_format($remainingWeight, 2) }}</td>
             <td>{{ number_format($remainingPacks) }}</td>
-            
         </tr>
     @empty
         <tr>
-            <td colspan="8" class="text-center text-muted py-4">දත්ත නොමැත.</td>
+            <td colspan="7" class="text-center text-muted py-4">දත්ත නොමැත.</td>
         </tr>
     @endforelse
 
@@ -167,10 +166,8 @@
         <td><strong>{{ number_format($grandTotalSoldPacks) }}</strong></td>
         <td><strong>{{ number_format($grandTotalRemainingWeight, 2) }}</strong></td>
         <td><strong>{{ number_format($grandTotalRemainingPacks) }}</strong></td>
-       
     </tr>
 </tbody>
-
                 </table>
             </div>
         </div>

@@ -48,7 +48,9 @@
         .bg-custom-dark {
             background-color: #004d00 !important;
             color: #fff;
+
         }
+
 
         .text-form-label {
             color: #fff !important;
@@ -150,7 +152,8 @@
                         <select class="form-select form-select-sm" id="customer_id" name="customer_id" required>
                             <option value="">-- Select Customer --</option>
                             @foreach($customers as $customer)
-                                <option value="{{ $customer->id }}" data-credit-limit="{{ $customer->credit_limit }}">
+                                <option value="{{ $customer->id }}" data-credit-limit="{{ $customer->credit_limit }}"
+                                    data-short-name="{{ $customer->short_name }}">
                                     {{ $customer->short_name }} - {{ $customer->name }}
                                 </option>
                             @endforeach
@@ -228,54 +231,60 @@
                             </div>
                         </div>
                     </div>
-                 {{-- NEW: Returns Section --}}
-<div id="returnsFields" class="col-md-12 d-none">
-    <div class="border rounded p-2 bg-light" style="border-color: #006600 !important;">
-        <h6 class="text-success fw-bold mb-2" style="border-bottom: 1px solid #006600;">Returns Details</h6>
-        <div class="row g-2">
-            <div class="col-2">
-                <label for="return_grn_code" class="form-label mb-1">GRN Code</label>
-                <select class="form-select form-select-sm" name="return_grn_code" id="return_grn_code">
-                    <option value="">-- Select GRN Code --</option>
-                    @foreach($grnCodes as $code)
-                        <option value="{{ $code }}">{{ $code }}</option>
-                    @endforeach
-                </select>
-            </div>
-            <div class="col-2">
-                <label for="return_item_code" class="form-label mb-1">Item Code</label>
-                <input type="text" class="form-control form-control-sm" name="return_item_code" id="return_item_code" readonly>
-            </div>
-            <div class="col-2">
-    <label for="return_bill_no" class="form-label mb-1">Bill No</label>
-    <select class="form-select form-select-sm" name="return_bill_no" id="return_bill_no">
-        <option value="">-- Select Bill --</option>
-        @foreach(\App\Models\Sale::pluck('bill_no') as $bill)
-            <option value="{{ $bill }}">{{ $bill }}</option>
-        @endforeach
-    </select>
-</div>
+                    {{-- NEW: Returns Section --}}
+                    <div id="returnsFields" class="col-md-12 d-none">
+                        <div class="border rounded p-2 bg-light" style="border-color: #006600 !important;">
+                            <h6 class="text-success fw-bold mb-2" style="border-bottom: 1px solid #006600;">Returns Details
+                            </h6>
+                            <div class="row g-2">
+                                <div class="col-2">
+                                    <label for="return_grn_code" class="form-label mb-1">GRN Code</label>
+                                    <select class="form-select form-select-sm" name="return_grn_code" id="return_grn_code">
+                                        <option value="">-- Select GRN Code --</option>
+                                        @foreach($grnCodes as $code)
+                                            <option value="{{ $code }}">{{ $code }}</option>
+                                        @endforeach
+                                    </select>
+                                </div>
+                                <div class="col-2">
+                                    <label for="return_item_code" class="form-label mb-1">Item Code</label>
+                                    <input type="text" class="form-control form-control-sm" name="return_item_code"
+                                        id="return_item_code" readonly>
+                                </div>
+                                <div class="col-2">
+                                    <label for="return_bill_no" class="form-label mb-1">Bill No</label>
+                                    <select class="form-select form-select-sm" name="return_bill_no" id="return_bill_no">
+                                        <option value="">-- Select Bill --</option>
+                                        @foreach(\App\Models\Sale::pluck('bill_no') as $bill)
+                                            <option value="{{ $bill }}">{{ $bill }}</option>
+                                        @endforeach
+                                    </select>
+                                </div>
 
-            <div class="col-2">
-                <label for="return_weight" class="form-label mb-1">Weight</label>
-                <input type="number" step="0.01" class="form-control form-control-sm" name="return_weight" id="return_weight">
-            </div>
-            <div class="col-2">
-                <label for="return_packs" class="form-label mb-1">Packs</label>
-                <input type="number" step="1" class="form-control form-control-sm" name="return_packs" id="return_packs">
-            </div>
-            <div class="col-2">
-                <label for="return_reason" class="form-label mb-1">Reason</label>
-                <input type="text" class="form-control form-control-sm" name="return_reason" id="return_reason">
-            </div>
-        </div>
+                                <div class="col-2">
+                                    <label for="return_weight" class="form-label mb-1">Weight</label>
+                                    <input type="number" step="0.01" class="form-control form-control-sm"
+                                        name="return_weight" id="return_weight">
+                                </div>
+                                <div class="col-2">
+                                    <label for="return_packs" class="form-label mb-1">Packs</label>
+                                    <input type="number" step="1" class="form-control form-control-sm" name="return_packs"
+                                        id="return_packs">
+                                </div>
+                                <div class="col-2">
+                                    <label for="return_reason" class="form-label mb-1">Reason</label>
+                                    <input type="text" class="form-control form-control-sm" name="return_reason"
+                                        id="return_reason">
+                                </div>
+                            </div>
 
-        <!-- Submit button for Returns Section -->
-        <div class="mt-3 text-end">
-            <button type="submit" class="btn btn-success btn-sm" id="returnSubmitButton">Add Return</button>
-        </div>
-    </div>
-</div>
+                            <!-- Submit button for Returns Section -->
+                            <div class="mt-3 text-end">
+                                <button type="submit" class="btn btn-success btn-sm" id="returnSubmitButton">Add
+                                    Return</button>
+                            </div>
+                        </div>
+                    </div>
 
 
                     <div class="col-12 mt-3" id="mainSubmitSection">
@@ -299,78 +308,83 @@
                             <th>Actions</th>
                         </tr>
                     </thead>
-                   <tbody>
-    @forelse($loans->where('loan_type', '!=', 'returns') as $loan)
-        <tr class="loan-row" data-loan='@json($loan)'>
-            <td>{{ $loan->description }}</td>
-            <td>{{ number_format(abs($loan->amount), 2) }}</td>
-            <td>{{ $loan->customer_short_name }}</td>
-            <td>{{ ucfirst($loan->loan_type) }}</td>
-            <td>{{ $loan->bill_no ?? '-' }}</td>
-            <td>
-                <button type="button" class="btn btn-sm btn-warning edit-loan-btn">Edit</button>
-                <form action="{{ route('customers-loans.destroy', $loan->id) }}" method="POST" class="d-inline">
-                    @csrf
-                    @method('DELETE')
-                    <button type="submit" onclick="return confirm('Are you sure?')" class="btn btn-sm btn-danger">Delete</button>
-                </form>
-            </td>
-        </tr>
-    @empty
-        <tr>
-            <td colspan="8" class="text-center">No loan records found.</td>
-        </tr>
-    @endforelse
-</tbody>
+                    <tbody>
+                        @forelse($loans->where('loan_type', '!=', 'returns') as $loan)
+                            <tr class="loan-row" data-loan='@json($loan)'>
+                                <td>{{ $loan->description }}</td>
+                                <td>{{ number_format(abs($loan->amount), 2) }}</td>
+                                <td>{{ $loan->customer_short_name }}</td>
+                                <td>{{ ucfirst($loan->loan_type) }}</td>
+                                <td>{{ $loan->bill_no ?? '-' }}</td>
+                                <td>
+                                    <button type="button" class="btn btn-sm btn-warning edit-loan-btn">Edit</button>
+                                    <form action="{{ route('customers-loans.destroy', $loan->id) }}" method="POST"
+                                        class="d-inline">
+                                        @csrf
+                                        @method('DELETE')
+                                        <button type="submit" onclick="return confirm('Are you sure?')"
+                                            class="btn btn-sm btn-danger">Delete</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        @empty
+                            <tr>
+                                <td colspan="8" class="text-center">No loan records found.</td>
+                            </tr>
+                        @endforelse
+                    </tbody>
 
                 </table>
                 <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
-    <!-- Financial Report Button -->
-    <a href="{{ route('financial.report') }}" target="_blank" class="btn btn-dark">
-        ආදායම් / වියදම්
-    </a>
+                    <!-- Financial Report Button -->
+                    <a href="{{ route('financial.report') }}" target="_blank" class="btn btn-dark">
+                        ආදායම් / වියදම්
+                    </a>
 
-    <!-- Loan Report Button -->
-    <a href="#" data-bs-toggle="modal" data-bs-target="#reportLoanModal" class="btn btn-dark">
-        ණය වාර්තාව
-    </a>
+                    <!-- Loan Report Button -->
+                    <a href="#" data-bs-toggle="modal" data-bs-target="#reportLoanModal" class="btn btn-dark">
+                        ණය වාර්තාව
+                    </a>
 
-    <!-- Returns Report Button -->
-    <a href="{{ route('returns.report') }}" class="btn btn-dark">
-       නැවත ලබා දීම්  වාර්තාව 
-    </a>
+                    <!-- Returns Report Button -->
+                    <a href="{{ route('returns.report') }}" class="btn btn-dark">
+                        නැවත ලබා දීම් වාර්තාව
+                    </a>
 
-    <!-- Cheque Payments Report Button -->
-    <a href="{{ route('reports.cheque-payments') }}" class="btn btn-dark">
-        චෙක් ගෙවීම් වාර්තාව බලන්න
-    </a>
+                    <!-- Cheque Payments Report Button -->
+                    <a href="{{ route('reports.cheque-payments') }}" class="btn btn-dark">
+                        චෙක් ගෙවීම් වාර්තාව බලන්න
+                    </a>
 
-    <!-- Set Balance Button -->
-    <button type="button" class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#balanceModal">
-        Set Balance
-    </button>
-</div>
-<!-- Modal -->
-<div class="modal fade" id="balanceModal" tabindex="-1" aria-labelledby="balanceModalLabel" aria-hidden="true">
-  <div class="modal-dialog">
-    <form action="{{ route('settings.updateBalance') }}" method="POST">
-        @csrf
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="balanceModalLabel">Enter Balance for Today</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <input type="number" name="balance" class="form-control" placeholder="Enter today's balance" step="0.01" required>
-            </div>
-            <div class="modal-footer">
-                <button type="submit" class="btn btn-success">Save Balance</button>
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-            </div>
-        </div>
-    </form>
-  </div>
-</div>
+                    <!-- Set Balance Button -->
+                    <button type="button" class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#balanceModal">
+                        Set Balance
+                    </button>
+                </div>
+                <!-- Modal -->
+                <div class="modal fade" id="balanceModal" tabindex="-1" aria-labelledby="balanceModalLabel"
+                    aria-hidden="true">
+                    <div class="modal-dialog">
+                        <form action="{{ route('settings.updateBalance') }}" method="POST">
+                            @csrf
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title" id="balanceModalLabel">Enter Balance for Today</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal"
+                                        aria-label="Close"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <input type="number" name="balance" class="form-control"
+                                        placeholder="Enter today's balance" step="0.01" required>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="submit" class="btn btn-success">Save Balance</button>
+                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
 
             </div>
         </div>
@@ -384,30 +398,30 @@
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
     <script>
-document.addEventListener("DOMContentLoaded", function () {
-    const returnBtn = document.getElementById("returnSubmitButton");
-    const loanForm = document.getElementById("loanForm");
+        document.addEventListener("DOMContentLoaded", function () {
+            const returnBtn = document.getElementById("returnSubmitButton");
+            const loanForm = document.getElementById("loanForm");
 
-    if (returnBtn) {
-        returnBtn.addEventListener("click", function (e) {
-            e.preventDefault(); // stop normal form submission
+            if (returnBtn) {
+                returnBtn.addEventListener("click", function (e) {
+                    e.preventDefault(); // stop normal form submission
 
-            // force loan_type = returns
-            let returnRadio = document.querySelector('input[name="loan_type"][value="returns"]');
-            if (returnRadio) {
-                returnRadio.checked = true;
+                    // force loan_type = returns
+                    let returnRadio = document.querySelector('input[name="loan_type"][value="returns"]');
+                    if (returnRadio) {
+                        returnRadio.checked = true;
+                    }
+
+                    // hide amount/description validation for returns
+                    document.querySelector('[name="amount"]').removeAttribute("required");
+                    document.querySelector('[name="description"]').removeAttribute("required");
+
+                    // submit form
+                    loanForm.submit();
+                });
             }
-
-            // hide amount/description validation for returns
-            document.querySelector('[name="amount"]').removeAttribute("required");
-            document.querySelector('[name="description"]').removeAttribute("required");
-
-            // submit form
-            loanForm.submit();
         });
-    }
-});
-</script>
+    </script>
 
 
     <script>
@@ -479,13 +493,24 @@ document.addEventListener("DOMContentLoaded", function () {
 
                 if (customerId && (loanType === 'today' || loanType === 'old')) {
                     $.ajax({
-                        url:  `https://wday.lk/AA/sms/customers/${customerId}/loans-total`,
+                        url: `https://wday.lk/customers/${customerId}/loans-total`,
                         method: 'GET',
                         success: function (response) {
-                            const formattedAmount = parseFloat(response.total_amount).toLocaleString(undefined, {
+                            // Parse the total amount
+                            let totalAmount = parseFloat(response.total_amount);
+
+                            // Remove minus sign if negative
+                            if (totalAmount < 0) {
+                                totalAmount = Math.abs(totalAmount);
+                            }
+
+                            // Format the amount
+                            const formattedAmount = totalAmount.toLocaleString(undefined, {
                                 minimumFractionDigits: 2,
                                 maximumFractionDigits: 2
                             });
+
+                            // Update the display
                             totalAmountDisplay.text(`(Total Loans: ${formattedAmount})`);
                         },
                         error: function () {
@@ -551,6 +576,97 @@ document.addEventListener("DOMContentLoaded", function () {
                     }
                 }
             }
+            //searc function
+            // Add this to your existing JavaScript
+            $(document).ready(function () {
+                // Initialize Select2 with custom search
+                $('#customer_id').select2({
+                    placeholder: "-- Select Customer --",
+                    allowClear: true,
+                    width: '100%',
+                    language: {
+                        noResults: function () {
+                            return "No customers found";
+                        }
+                    },
+                    matcher: function (params, data) {
+                        // If there's no search term, return all results
+                        if ($.trim(params.term) === '') {
+                            return data;
+                        }
+
+                        const searchTerm = params.term.toLowerCase();
+                        const optionText = data.text.toLowerCase();
+
+                        // If search term is only one character, use first letter matching
+                        if (searchTerm.length === 1) {
+                            // Check if the first letter of short name matches the search term
+                            if (data.element && $(data.element).data('short-name')) {
+                                const shortName = $(data.element).data('short-name').toLowerCase();
+                                // Check if first letter matches
+                                if (shortName.charAt(0) === searchTerm.charAt(0)) {
+                                    return data;
+                                }
+                            }
+                        }
+                        // If search term has more than one character, use normal text filtering
+                        else {
+                            // Check if the option text contains the search term
+                            if (optionText.includes(searchTerm)) {
+                                return data;
+                            }
+                        }
+
+                        // If no match, don't return the result
+                        return null;
+                    }
+                });
+                // Function to focus on customer search
+                function focusCustomerSearch() {
+                    setTimeout(function () {
+                        // Open the Select2 dropdown and focus on search field
+                        $('#customer_id').select2('open');
+                    }, 100);
+                }
+
+                // Focus on page load
+                $(document).ready(function () {
+                    // Focus on customer search when page loads (only for 'old' and 'today' loan types)
+                    const currentLoanType = $('input[name="loan_type"]:checked').val();
+                    if (currentLoanType === 'old' || currentLoanType === 'today') {
+                        focusCustomerSearch();
+                    }
+                });
+
+                // Focus when radio buttons change
+                $('input[name="loan_type"]').on('change', function () {
+                    if (this.value === 'old' || this.value === 'today') {
+                        focusCustomerSearch();
+                    }
+                });
+
+                // Also add this to your existing toggleLoanTypeDependentFields function
+                function toggleLoanTypeDependentFields() {
+                    const loanType = $('input[name="loan_type"]:checked').val();
+                    const settlingWay = $('input[name="settling_way"]:checked').val();
+
+                    // Auto-focus for old and today loan types
+                    if (loanType === 'old' || loanType === 'today') {
+                        setTimeout(function () {
+                            if ($('#customer_id').is(':visible')) {
+                                focusCustomerSearch();
+                            }
+                        }, 300);
+                    }
+                }
+
+                // Focus the search input when dropdown opens
+                $('#customer_id').on('select2:open', function () {
+                    setTimeout(function () {
+                        document.querySelector('.select2-container--open .select2-search__field').focus();
+                    }, 50);
+                });
+            });
 
             // Event listeners
             $('input[name="loan_type"], input[name="settling_way"]').on('change', function () {
@@ -571,8 +687,8 @@ document.addEventListener("DOMContentLoaded", function () {
                 // Handle PUT action dynamically
                 if (method === 'PUT') {
                     const loanId = $('#loan_id').val();
-                    url = `https://wday.lk/AA/sms/customers-loans/${loanId}`
-; // The URL must include the ID for update
+                    url = `https://wday.lk/customers-loans/${loanId}`
+                        ; // The URL must include the ID for update
                 }
 
                 const formData = $(form).serialize();
@@ -582,7 +698,7 @@ document.addEventListener("DOMContentLoaded", function () {
                     type: 'POST', // Use POST for form submission and spoof the method
                     data: formData + '&_method=' + method, // Append _method to the data
                     success: function (response) {
-                        alert(response.message || 'Success!');
+
                         location.reload();
                     },
                     error: function (xhr) {
@@ -615,7 +731,12 @@ document.addEventListener("DOMContentLoaded", function () {
                 $('input[name="settling_way"][value="' + (loan.settling_way ?? 'cash') + '"]').prop('checked', true);
 
                 // Set common fields
-                $('input[name="amount"]').val(loan.amount);
+                // Set amount field - remove minus sign if present (for display only)
+                let displayAmount = loan.amount;
+                if (displayAmount < 0) {
+                    displayAmount = Math.abs(displayAmount);
+                }
+                $('input[name="amount"]').val(displayAmount);
                 $('input[name="description"]').val(loan.description);
                 $('input[name="bill_no"]').val(loan.bill_no ?? '');
                 if (loan.customer_id) $('#customer_id').val(loan.customer_id).trigger('change');
@@ -654,129 +775,176 @@ document.addEventListener("DOMContentLoaded", function () {
             $('#cancelEditButton').on('click', resetForm);
 
             // Keyboard navigation
+            // Keyboard navigation
             $('#customer_id').on('select2:close', () => $('input[name="bill_no"]').focus());
-            $('input[name="bill_no"]').on('keypress', e => { if (e.which === 13) { e.preventDefault(); $('input[name="amount"]').focus(); } });
-            $('input[name="amount"]').on('keypress', e => { if (e.which === 13) { e.preventDefault(); $('input[name="description"]').focus(); } });
-            $('input[name="description"]').on('keypress', e => { if (e.which === 13) { e.preventDefault(); $('#submitButton').click(); } });
+            $('input[name="bill_no"]').on('keypress', e => {
+                if (e.which === 13) {
+                    e.preventDefault();
+                    $('input[name="amount"]').focus();
+                }
+            });
+            $('input[name="amount"]').on('keypress', e => {
+                if (e.which === 13) {
+                    e.preventDefault();
+                    $('input[name="description"]').focus();
+                }
+            });
+            $('input[name="description"]').on('keypress', e => {
+                if (e.which === 13) {
+                    e.preventDefault();
+                    // Submit the form only for these three loan types
+                    const loanType = $('input[name="loan_type"]:checked').val();
+                    if (['today', 'ingoing', 'outgoing'].includes(loanType)) {
+                        $('#submitButton').click();
+                    } else {
+                        // For other loan types, you can add specific behavior or leave as is
+                        $('#submitButton').click(); // or remove this line if you don't want auto-submit for other types
+                    }
+                }
+            });
+            // Form submission with Enter key
+            $(document).on('keypress', function (e) {
+                if (e.which === 13) {
+                    // Check if we're in a text input or textarea
+                    if ($(e.target).is('input:not([type="button"]):not([type="submit"]):not([type="reset"]), textarea, select')) {
+                        e.preventDefault();
+                        // Only submit if we're specifically in the description field for those loan types
+                        if ($(e.target).is('#description') && ['today', 'ingoing', 'outgoing'].includes($('input[name="loan_type"]:checked').val())) {
+                            $('#submitButton').click();
+                        }
+                    }
+                }
+            });
 
             // Initial setup
             resetForm();
         });
     </script>
-   <script>
-document.addEventListener('DOMContentLoaded', function () {
-    const returnsFields = document.getElementById('returnsFields');
-    const wastedFields = document.getElementById('wastedFields');
-    const chequeFields = document.getElementById('chequeFields');
-    const loanDetails = document.getElementById('loan-details-row');
-    const radios = document.querySelectorAll('input[name="loan_type"]');
-    const loanSection = document.getElementById('submitButton');
-    const amountSection = document.getElementById('amount_section');
-    const descriptionSection = document.getElementById('description_section');
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const returnsFields = document.getElementById('returnsFields');
+            const wastedFields = document.getElementById('wastedFields');
+            const chequeFields = document.getElementById('chequeFields');
+            const loanDetails = document.getElementById('loan-details-row');
+            const radios = document.querySelectorAll('input[name="loan_type"]');
+            const loanSection = document.getElementById('submitButton');
+            const amountSection = document.getElementById('amount_section');
+            const descriptionSection = document.getElementById('description_section');
 
-    radios.forEach(radio => {
-        radio.addEventListener('change', function () {
-            // Hide all optional sections first
-            returnsFields.classList.add('d-none');
-            wastedFields.classList.add('d-none');
-            chequeFields.classList.add('d-none');
-            loanDetails.classList.remove('d-none');
-            amountSection.classList.remove('d-none');
-            descriptionSection.classList.remove('d-none');
+            radios.forEach(radio => {
+                radio.addEventListener('change', function () {
+                    // Hide all optional sections first
+                    returnsFields.classList.add('d-none');
+                    wastedFields.classList.add('d-none');
+                    chequeFields.classList.add('d-none');
+                    loanDetails.classList.remove('d-none');
+                    amountSection.classList.remove('d-none');
+                    descriptionSection.classList.remove('d-none');
 
-            if (this.value === 'returns') {
-                // Show returns, hide amount + description
-                returnsFields.classList.remove('d-none');
-                loanDetails.classList.add('d-none');
-                amountSection.classList.add('d-none');
-                descriptionSection.classList.add('d-none');
-                loanSection.classList.add('d-none');
-            } else if (this.value === 'grn_damage') {
-                // Show wasted, hide amount + description
-                wastedFields.classList.remove('d-none');
-                loanDetails.classList.add('d-none');
-                amountSection.classList.add('d-none');
-                descriptionSection.classList.add('d-none');
+                    if (this.value === 'returns') {
+                        // Show returns, hide amount + description
+                        returnsFields.classList.remove('d-none');
+                        loanDetails.classList.add('d-none');
+                        amountSection.classList.add('d-none');
+                        descriptionSection.classList.add('d-none');
+                        loanSection.classList.add('d-none');
+                    } else if (this.value === 'grn_damage') {
+                        // Show wasted, hide amount + description
+                        wastedFields.classList.remove('d-none');
+                        loanDetails.classList.add('d-none');
+                        amountSection.classList.add('d-none');
+                        descriptionSection.classList.add('d-none');
+                    }
+                });
+            });
+
+            // Autofill Item Code from GRN when Returns selected
+            const returnGrn = document.getElementById('return_grn_code');
+            if (returnGrn) {
+                returnGrn.addEventListener('change', function () {
+                    let code = this.value;
+                    if (!code) return;
+                    fetch(`https://wday.lk/api/grn-entry/${code}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            document.getElementById('return_item_code').value = data?.item_code || '';
+                        });
+                });
+            }
+
+            fetch('https://wday.lk/api/all-bill-nos')
+                .then(res => res.json())
+                .then(billNosObj => {
+                    const returnBill = document.getElementById('return_bill_no');
+                    returnBill.innerHTML = '<option value="">-- Select Bill --</option>';
+
+                    // Convert object values to array
+                    const billNos = Object.values(billNosObj);
+
+                    billNos.forEach(bill => {
+                        const opt = document.createElement('option');
+                        opt.value = bill;
+                        opt.textContent = bill;
+                        returnBill.appendChild(opt);
+                    });
+                })
+                .catch(err => console.error(err));
+
+        });
+    </script>
+    <script>
+        document.addEventListener('input', function (e) {
+            // Detect typing inside the search box of a searchable dropdown
+            const searchField = e.target.closest('.select2-search__field, .bs-searchbox input');
+
+            if (searchField) {
+                e.target.value = e.target.value.toUpperCase();
             }
         });
-    });
+    </script>
 
-    // Autofill Item Code from GRN when Returns selected
-    const returnGrn = document.getElementById('return_grn_code');
-    if (returnGrn) {
-        returnGrn.addEventListener('change', function () {
-            let code = this.value;
-            if (!code) return;
-            fetch(`https://wday.lk/AA/sms/api/grn-entry/${code}`)
-                .then(res => res.json())
-                .then(data => {
-                    document.getElementById('return_item_code').value = data?.item_code || '';
-                });
-        });
-    }
-
- fetch('https://wday.lk/AA/sms/api/all-bill-nos')
-    .then(res => res.json())
-    .then(billNosObj => {
-        const returnBill = document.getElementById('return_bill_no');
-        returnBill.innerHTML = '<option value="">-- Select Bill --</option>';
-
-        // Convert object values to array
-        const billNos = Object.values(billNosObj);
-
-        billNos.forEach(bill => {
-            const opt = document.createElement('option');
-            opt.value = bill;
-            opt.textContent = bill;
-            returnBill.appendChild(opt);
-        });
-    })
-    .catch(err => console.error(err));
-
-});
-</script>
-<script>
-    $(document).ready(function() {
-        $('#return_bill_no').select2({
-            placeholder: "-- Select Bill --",
-            allowClear: true
-        });
-    });
-</script>
-<script>
-    document.addEventListener('DOMContentLoaded', function () {
-        const loanTypeRadios = document.querySelectorAll('input[name="loan_type"]');
-        const descriptionSection = document.getElementById('description_section');
-
-        // Original HTML content of the description field
-        const originalDescriptionHTML = descriptionSection.innerHTML;
-
-        // Dropdown HTML for outgoing
-        const outgoingDropdownHTML = `
-            <label for="description" class="text-form-label">විස්තරය</label>
-            <select class="form-select form-select-sm" name="description" id="description" required>
-                <option value="">-- Select --</option>
-                <option value="Salary">Salary</option>
-                <option value="Fuel">Fuel</option>
-                <option value="Electricity">Electricity</option>
-                <option value="Food">Food</option>
-                <option value="WaterBill">WaterBill</option>
-                <option value="Other">Other</option>
-            </select>
-            <span id="totalAmountDisplay" class="text-white-50" style="font-weight: bold; font-size: 0.9rem;"></span>
-        `;
-
-        loanTypeRadios.forEach(radio => {
-            radio.addEventListener('change', function () {
-                if (this.value === 'outgoing') {
-                    descriptionSection.innerHTML = outgoingDropdownHTML;
-                } else {
-                    descriptionSection.innerHTML = originalDescriptionHTML;
-                }
+    <script>
+        $(document).ready(function () {
+            $('#return_bill_no').select2({
+                placeholder: "-- Select Bill --",
+                allowClear: true
             });
         });
-    });
-</script>
+    </script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const loanTypeRadios = document.querySelectorAll('input[name="loan_type"]');
+            const descriptionSection = document.getElementById('description_section');
+
+            // Original HTML content of the description field
+            const originalDescriptionHTML = descriptionSection.innerHTML;
+
+            // Dropdown HTML for outgoing
+            const outgoingDropdownHTML = `
+                                <label for="description" class="text-form-label">විස්තරය</label>
+                                <select class="form-select form-select-sm" name="description" id="description" required>
+                                    <option value="">-- Select --</option>
+                                    <option value="Salary">Salary</option>
+                                    <option value="Fuel">Fuel</option>
+                                    <option value="Electricity">Electricity</option>
+                                    <option value="Food">Food</option>
+                                    <option value="WaterBill">WaterBill</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                                <span id="totalAmountDisplay" class="text-white-50" style="font-weight: bold; font-size: 0.9rem;"></span>
+                            `;
+
+            loanTypeRadios.forEach(radio => {
+                radio.addEventListener('change', function () {
+                    if (this.value === 'outgoing') {
+                        descriptionSection.innerHTML = outgoingDropdownHTML;
+                    } else {
+                        descriptionSection.innerHTML = originalDescriptionHTML;
+                    }
+                });
+            });
+        });
+    </script>
 
 
 

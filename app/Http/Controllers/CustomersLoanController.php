@@ -395,7 +395,7 @@ public function getTotalLoanAmount($customerId)
     $todaySum = (float) ($totals->today_sum ?? 0);
     $oldSum   = (float) ($totals->old_sum ?? 0);
 
-    $totalAmount = $todaySum + $oldSum; // sum as positive numbers
+    $totalAmount = $todaySum - $oldSum; // sum as positive numbers
 
     return response()->json([
         'old_sum'      => $oldSum,

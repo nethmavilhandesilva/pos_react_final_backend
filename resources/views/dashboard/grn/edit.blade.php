@@ -147,7 +147,7 @@
                 <label for="per_kg_price" class="form-label">Per KG Price</label>
                 <input type="number" id="per_kg_price" name="per_kg_price" 
                        class="form-control form-control-sm" 
-                       value="{{ old('per_kg_price', $entry->per_kg_price) }}" step="0.01" readonly>
+                       value="{{ old('per_kg_price', $entry->PerKGPrice) }}" step="0.01">
             </div>
 
         </div>

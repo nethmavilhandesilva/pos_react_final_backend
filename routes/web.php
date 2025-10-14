@@ -36,11 +36,11 @@ Route::get('/register', [RegisteredUserController::class, 'create'])
 // Item
 Route::resource('items', ItemController::class);
 
-// Customers
-Route::resource('customers', CustomerController::class);
+
 
 // Suppliers
 Route::resource('suppliers', SupplierController::class);
+
 
 // GRN
 Route::resource('grn', GrnEntryController::class) ->except(['show']);
@@ -50,6 +50,7 @@ Route::get('/grn-used-data/{code}', [GrnEntryController::class, 'getUsedData']);
 Route::post('/grn/{id}/hide', [GrnEntryController::class, 'hide'])->name('grn.hide');
 Route::post('/grn/{id}/unhide', [GrnEntryController::class, 'unhide'])->name('grn.unhide');
 Route::post('/grn-damages', [GrnEntryController::class, 'Damagestore'])->name('grn-damages.store');
+Route::get('/grn-entries/latest', [GrnEntryController::class, 'getLatestEntries']);
 
 
 // Sales

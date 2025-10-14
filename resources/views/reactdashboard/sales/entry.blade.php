@@ -302,15 +302,25 @@
     
     console.log('Navigation bars loaded - always visible');
   </script>
-  <script>
+  {{-- In your Blade file --}}
+<script>
     window.__ROUTES__ = {
-      markPrinted: '/sales/mark-printed',
-      getLoanAmount: '/get-loan-amount',
-      markAllProcessed: '/sales/mark-all-processed',
-      givenAmount: '/sales/:id/given-amount',
-     
+        markPrinted: "{{ url('https://wday.lk/sales/mark-printed') }}",
+        getLoanAmount: "{{ url('https://wday.lk/get-loan-amount') }}", 
+        markAllProcessed: "{{ url('https://wday.lk/sales/mark-all-processed') }}",
+        givenAmount: "{{ url('https://wday.lk/sales/:id/given-amount') }}",
+        getLatestGrnEntries: "{{ url('https://wday.lk/grn-entries/latest')}}"  
     };
 </script>
+ <script>
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'F10') {
+        event.preventDefault(); // prevent browser default F10 behavior
+        location.reload(); // refresh the page
+      }
+    });
+  </script>
+
    @include('layouts.partials.footer')
     @include('layouts.partials.report-modal')
     @include('layouts.partials.item-wisemodal')
