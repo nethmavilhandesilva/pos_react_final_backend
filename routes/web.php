@@ -83,7 +83,7 @@ Route::get('/sales/code/{code}', [SalesEntryController::class, 'showByCode'])->n
 Route::post('/save-receipt-file', [SalesEntryController::class, 'saveReceiptFile'])->name('save.receipt.file');
 Route::post('/loan-report/results', [CustomersLoanController::class, 'loanReportResults'])->name('loan.report.results');
 Route::get('/customers-loans/report', [CustomersLoanController::class, 'loanReport'])->name('customers-loans.report');
-Route::resource('customers-loans', CustomersLoanController::class);
+
 //Emails
 Route::post('/send-receipt-email', [EmailController::class, 'sendReceiptEmail'])->name('send.receipt.email');
 Route::post('/send-receipt-email', [EmailController::class, 'sendReceiptEmail'])->name('send.receipt.email');
