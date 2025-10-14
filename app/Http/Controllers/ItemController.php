@@ -10,35 +10,32 @@ class ItemController extends Controller
     public function index()
     {
         $items = Item::all();
-        return view('dashboard.items.index', compact('items'));
-    }
-
-    public function create()
-    {
-        return view('dashboard.items.create');
+        return response()->json($items);
     }
 
     public function store(Request $request)
-{
-    $request->validate([
-        'no'        => 'required',
-        'type'      => 'required',
-        'pack_cost' => 'required|numeric',
-        'pack_due'  => 'required|numeric',
-    ]);
-
-    // Force 'no' to uppercase
-    $data = $request->all();
-    $data['no'] = strtoupper($data['no']);
-
-    Item::create($data);
-
-    return redirect()->route('items.index')->with('success', 'Item added successfully!');
-}
-
-    public function edit(Item $item)
     {
-        return view('dashboard.items.edit', compact('item'));
+        $request->validate([
+            'no'        => 'required',
+            'type'      => 'required',
+            'pack_cost' => 'required|numeric',
+            'pack_due'  => 'required|numeric',
+        ]);
+
+        $data = $request->all();
+        $data['no'] = strtoupper($data['no']);
+
+        $item = Item::create($data);
+
+        return response()->json([
+            'message' => 'Item added successfully!',
+            'item' => $item
+        ], 201);
+    }
+
+    public function show(Item $item)
+    {
+        return response()->json($item);
     }
 
     public function update(Request $request, Item $item)
@@ -50,14 +47,29 @@ class ItemController extends Controller
             'pack_due' => 'required|numeric',
         ]);
 
-        $item->update($request->all());
+        $data = $request->all();
+        $data['no'] = strtoupper($data['no']);
 
-        return redirect()->route('items.index')->with('success', 'Item updated successfully!');
+        $item->update($data);
+
+        return response()->json([
+            'message' => 'Item updated successfully!',
+            'item' => $item
+        ]);
     }
 
     public function destroy(Item $item)
     {
         $item->delete();
-        return redirect()->route('items.index')->with('success', 'Item deleted successfully!');
+        return response()->json(['message' => 'Item deleted successfully!']);
+    }
+
+    public function search($query)
+    {
+        $items = Item::where('no', 'LIKE', $query . '%')
+                    ->orWhere('type', 'LIKE', $query . '%')
+                    ->get();
+        
+        return response()->json($items);
     }
 }

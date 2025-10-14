@@ -33,11 +33,6 @@ Route::get('/register', [RegisteredUserController::class, 'create'])
     ->middleware('guest')
     ->name('register');
 
-// Item
-Route::resource('items', ItemController::class);
-
-
-
 // Suppliers
 Route::resource('suppliers', SupplierController::class);
 
