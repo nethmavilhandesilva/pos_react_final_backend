@@ -6,6 +6,7 @@ use App\Http\Controllers\ItemController;
 use App\Http\Controllers\SupplierController;
 use App\Http\Controllers\GrnEntryController;
 use App\Http\Controllers\CustomersLoanController;
+use App\Http\Controllers\ReportController;
 
 //CUSTOMERS
 Route::get('/customers', [CustomerController::class, 'apiIndex']);
@@ -37,3 +38,6 @@ Route::get('/grn/balance/{code}', [GrnEntryController::class, 'getGrnBalance']);
 Route::post('/grn/store2', [GrnEntryController::class, 'store2']);
 Route::delete('/grn/delete/update/{id}', [GrnEntryController::class, 'destroyupdate']);
 Route::get('/grn-entries/code/{code}', [GrnEntryController::class, 'getByCode']);
+//Reports
+Route::get('/allitems', [ReportController::class, 'fetchItems']);
+Route::get('/item-report', [ReportController::class, 'itemReport']);

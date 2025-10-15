@@ -8,6 +8,7 @@ use App\Models\IncomeExpenses;
 use App\Models\SalesHistory;
 use Illuminate\Http\Request;
 use App\Models\Sale;
+use App\Models\Item;
 use App\Models\GrnEntry;// Replace with your actual model name
 use Carbon\Carbon;
 use Maatwebsite\Excel\Facades\Excel;
@@ -43,137 +44,57 @@ use App\Exports\GrnOverviewExport;
 
 class ReportController extends Controller
 {
-    public function index()
+    public function fetchItems()
     {
-
-        $suppliers = Sale::select('supplier_code')->distinct()->pluck('supplier_code');
-        return view('dashboard.reports.salesbasedonsuppliers', compact('suppliers'));
-    }
-
-    public function fetch(Request $request)
-    {
-        // Log the incoming request data to check what values are being sent
-        Log::info('Report Fetch Request:', $request->all());
-
-        // Determine date range for filtering
-        $startDate = $request->input('start_date');
-        $endDate = $request->input('end_date');
-
-        if ($startDate && $endDate) {
-            // If a date range is provided, query the Salesadjustment table
-            $query = SalesHistory::query();
-
-            // Apply date range filter
-            $query->whereBetween('Date', [
-                Carbon::parse($startDate)->startOfDay(),
-                Carbon::parse($endDate)->endOfDay()
-            ]);
-
-            // Filter by supplier_code (optional) for Salesadjustment
-            if ($request->filled('supplier_code') && $request->supplier_code !== 'all') {
-                $query->where('supplier_code', $request->supplier_code);
-            }
-
-            // Filter by GRN code if selected (assuming 'code' applies to Salesadjustment as well)
-            if ($request->filled('code')) {
-                $query->where('code', $request->code);
-            }
-
-        } else {
-            // If no date range, continue to query the Sale table
-            $query = Sale::query();
-
-            // Filter by supplier_code (optional) for Sale
-            if ($request->filled('supplier_code') && $request->supplier_code !== 'all') {
-                $query->where('supplier_code', $request->supplier_code);
-            }
-
-            // Filter by GRN code if selected for Sale
-            if ($request->filled('code')) {
-                $query->where('code', $request->code);
-            }
-        }
-
-        // Log the final built query
-        Log::info('Report Fetch Final Query:', ['sql' => $query->toSql(), 'bindings' => $query->getBindings()]);
-
-        // Select common fields that exist in both models, or adjust based on which model is queried
-        $records = $query->get([
-            'supplier_code',
-            'code',
-            'bill_no',
-            'packs',
-            'weight',
-            'price_per_kg',
-            'item_code',
-            'total',
-            'customer_code',
-            'created_at'
-        ]);
-
-        return view('dashboard.reports.resultsalesbasedonsuppliers', [
-            'records' => $records,
-            'shop_no' => 'C11',
-            'filters' => $request->all()
+        $items = Item::select('no', 'type')->get();
+        
+        return response()->json([
+            'items' => $items
         ]);
     }
 
-    public function fetchItemReport(Request $request)
-    {
-        $validated = $request->validate([
-            'item_code' => 'required',
-            'supplier_code' => 'nullable|string',
-            'start_date' => 'nullable|date',
-            'end_date' => 'nullable|date',
-        ]);
+    public function itemReport(Request $request)
+{
+    // Log the incoming request for debugging
+    \Log::info('Item Report Request:', $request->all());
 
-        $startDate = $request->input('start_date');
-        $endDate = $request->input('end_date');
+    // Get parameters - try different possible names
+    $itemCode = $request->query('item_code') ?? $request->query('item_code');
+    
+    $startDate = $request->query('start_date');
+    $endDate = $request->query('end_date');
 
-        // Determine which model to query based on the presence of a date range
-        if ($startDate && $endDate) {
-            // If both start_date and end_date are provided, query Salesadjustment
-            $query = SalesHistory::query();
+    \Log::info("Searching for item: $itemCode, Date range: $startDate to $endDate");
 
-            // Apply date range filter
-            $query->whereBetween('Date', [
-                Carbon::parse($startDate)->startOfDay(),
-                Carbon::parse($endDate)->endOfDay()
-            ]);
-
-        } else {
-            // Otherwise, query Sale (default behavior)
-            $query = Sale::query();
-        }
-
-        // Apply common filters to the selected query
-        $query->where('item_code', $validated['item_code']);
-
-        if (!empty($request->supplier_code) && $request->supplier_code !== 'all') {
-            $query->where('supplier_code', $request->supplier_code);
-        }
-
-        $sales = $query->get([
-            'Date',
-            'item_code',
-            'packs',
-            'weight',
-            'price_per_kg',
-            'total',
-            'customer_code',
-            'supplier_code',
-            'bill_no',
-            'item_name',
-            'created_at',
-            'code',
-            // Include created_at for consistency and potential display
-        ]);
-
-        return view('dashboard.reports.item-wise-report', [
-            'sales' => $sales,
-            'filters' => $request->all()
-        ]);
+    if (!$itemCode) {
+        return response()->json(['error' => 'Item code is required'], 400);
     }
+
+    $query = Sale::query()->where('item_code', $itemCode);
+
+    // Apply date filters only if provided
+    if ($startDate) {
+        $query->whereDate('created_at', '>=', $startDate);
+    }
+    
+    if ($endDate) {
+        $query->whereDate('created_at', '<=', $endDate);
+    }
+
+    $sales = $query->get();
+
+    \Log::info("Found {$sales->count()} sales records for item: $itemCode");
+
+    return response()->json([
+        'sales' => $sales,
+        'filters' => [
+            'item_code' => $itemCode,
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'record_count' => $sales->count()
+        ]
+    ]);
+}
    public function getweight(Request $request)
     {
         $grnCode = $request->input('grn_code');
