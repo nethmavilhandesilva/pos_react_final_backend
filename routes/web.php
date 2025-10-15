@@ -61,8 +61,6 @@ Route::post('/update-grn-stock', [SalesEntryController::class, 'updateGrnRemaini
 
 // Reports
 Route::get('/report', [ReportController::class, 'index'])->name('report.index');
-Route::post('/report/weight', [ReportController::class, 'getweight'])->name('report.supplier_grn.fetch');
-Route::post('/report/sale-code', [ReportController::class, 'getGrnSalecodereport'])->name('report.grn_sale.fetch');
 Route::get('/reports/sales/filter', [ReportController::class, 'getSalesFilterReport'])->name('report.sales.filter');
 Route::get('/reports/grn-sales-overview', [ReportController::class, 'getGrnSalesOverviewReport'])->name('report.grn.sales.overview');
 Route::get('/reports/grn-sales-overview2', [ReportController::class, 'getGrnSalesOverviewReport2'])->name('report.grn.sales.overview2');

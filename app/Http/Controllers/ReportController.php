@@ -136,47 +136,51 @@ class ReportController extends Controller
         'filters' => $request->all(),
     ]);
 }
-    public function getGrnSalecodereport(Request $request)
-    {
-        $grnCode = $request->input('grn_code');
-        $startDate = $request->input('start_date');
-        $endDate = $request->input('end_date');
+    public function getGrnEntries()
+{
+    $entries = GrnEntry::select('code', 'supplier_code', 'item_code', 'item_name', 'packs', 'grn_no', 'txn_date')
+        ->orderBy('created_at', 'desc')
+        ->get();
+        
+    return response()->json([
+        'entries' => $entries
+    ]);
+}
 
-        if (!$grnCode) {
-            return redirect()->back()->withErrors('Please select a GRN code.');
-        }
+public function getGrnSalecodereport(Request $request)
+{
+    $grnCode = $request->input('grn_code');
+    $startDate = $request->input('start_date');
+    $endDate = $request->input('end_date');
 
-        // Determine which model to query based on the presence of a date range
-        if ($startDate && $endDate) {
-            // If both start_date and end_date are provided, query Salesadjustment
-            $query = SalesHistory::query();
-
-            // Apply the date filter using Carbon for precision
-            $query->whereBetween('Date', [
-                Carbon::parse($startDate)->startOfDay(),
-                Carbon::parse($endDate)->endOfDay()
-            ]);
-
-        } else {
-            // Otherwise, query Sale (default behavior)
-            $query = Sale::query();
-        }
-
-        // Apply the GRN code filter to the selected query
-        $query->where('code', $grnCode);
-
-        $sales = $query->orderBy('created_at', 'asc')->get();
-        $selectedGrnEntry = GrnEntry::where('code', $grnCode)->first();
-
-        return view('dashboard.reports.grn_sale_code_report', [
-            'sales' => $sales,
-            'selectedGrnCode' => $grnCode,
-            'selectedGrnEntry' => $selectedGrnEntry,
-            'startDate' => $startDate,
-            'endDate' => $endDate,
-            'filters' => $request->all(),
-        ]);
+    if (!$grnCode) {
+        return response()->json(['error' => 'GRN code is required'], 400);
     }
+
+    // Your existing logic...
+    if ($startDate && $endDate) {
+        $query = SalesHistory::query();
+        $query->whereBetween('Date', [
+            Carbon::parse($startDate)->startOfDay(),
+            Carbon::parse($endDate)->endOfDay()
+        ]);
+    } else {
+        $query = Sale::query();
+    }
+
+    $query->where('code', $grnCode);
+    $sales = $query->orderBy('created_at', 'asc')->get();
+    $selectedGrnEntry = GrnEntry::where('code', $grnCode)->first();
+
+    return response()->json([
+        'sales' => $sales,
+        'selectedGrnCode' => $grnCode,
+        'selectedGrnEntry' => $selectedGrnEntry,
+        'startDate' => $startDate,
+        'endDate' => $endDate,
+        'filters' => $request->all(),
+    ]);
+}
     public function getSalesFilterReport(Request $request)
     {
         $startDate = $request->input('start_date');
