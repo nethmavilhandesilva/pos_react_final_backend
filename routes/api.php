@@ -31,3 +31,7 @@ Route::post('/customers-loans', [CustomersLoanController::class, 'store']);
 Route::get('/customers-loans/{customerId}/total', [CustomersLoanController::class, 'getCustomerLoanTotal']);
 Route::put('/customers-loans/{id}', [CustomersLoanController::class, 'update']);
 Route::delete('/customers-loans/{id}', [CustomersLoanController::class, 'destroy']);
+Route::get('/not-changing-grns', [GrnEntryController::class, 'getNotChangingGRNs']);
+Route::get('/grn/balance/{code}', [GrnEntryController::class, 'getGrnBalance']);
+Route::post('/grn/store2', [GrnEntryController::class, 'store2']);
+Route::delete('/grn/delete/update/{id}', [GrnEntryController::class, 'destroyupdate']);

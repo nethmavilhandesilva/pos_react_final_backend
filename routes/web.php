@@ -36,7 +36,7 @@ Route::get('/register', [RegisteredUserController::class, 'create'])
 
 
 // Sales
-Route::get('/dashboard', [SalesEntryController::class, 'create'])->name('dashboard');
+
 Route::post('/grn-entry', [SalesEntryController::class, 'store'])->name('grn.store');
 
 Route::put('/sales/{sale}', [SalesEntryController::class, 'update']);
