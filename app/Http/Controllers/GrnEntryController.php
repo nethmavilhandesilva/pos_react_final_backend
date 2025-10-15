@@ -326,4 +326,9 @@ class GrnEntryController extends Controller
             ], 500);
         }
     }
+    public function getByCode($code)
+{
+    $entries = GrnEntry2::where('code', $code)->get();
+    return response()->json($entries);
+}
 }

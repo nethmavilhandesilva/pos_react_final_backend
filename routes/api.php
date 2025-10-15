@@ -36,3 +36,4 @@ Route::get('/not-changing-grns', [GrnEntryController::class, 'getNotChangingGRNs
 Route::get('/grn/balance/{code}', [GrnEntryController::class, 'getGrnBalance']);
 Route::post('/grn/store2', [GrnEntryController::class, 'store2']);
 Route::delete('/grn/delete/update/{id}', [GrnEntryController::class, 'destroyupdate']);
+Route::get('/grn-entries/code/{code}', [GrnEntryController::class, 'getByCode']);
