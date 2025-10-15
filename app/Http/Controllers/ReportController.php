@@ -95,47 +95,47 @@ class ReportController extends Controller
         ]
     ]);
 }
-   public function getweight(Request $request)
-    {
-        $grnCode = $request->input('grn_code');
-        $startDate = $request->input('start_date');
-        $endDate = $request->input('end_date');
+  public function getweight(Request $request)
+{
+    $grnCode = $request->input('grn_code');
+    $startDate = $request->input('start_date');
+    $endDate = $request->input('end_date');
 
-        // Choose base query depending on date range
-        if ($startDate && $endDate) {
-            $query = SalesHistory::selectRaw('item_name, item_code, SUM(packs) as packs, SUM(weight) as weight, SUM(total) as total')
-                ->whereBetween('Date', [
-                    Carbon::parse($startDate)->startOfDay(),
-                    Carbon::parse($endDate)->endOfDay()
-                ]);
-        } else {
-            $query = Sale::selectRaw('item_name, item_code, SUM(packs) as packs, SUM(weight) as weight, SUM(total) as total');
-        }
-
-        // Filter by GRN code if given
-        if (!empty($grnCode)) {
-            $query->where('code', $grnCode);
-        }
-
-        // Group by item name & code
-        $sales = $query->groupBy('item_name', 'item_code')
-            ->orderBy('item_name', 'asc')
-            ->get();
-
-        // Only fetch GRN entry if code given
-        $selectedGrnEntry = !empty($grnCode)
-            ? GrnEntry::where('code', $grnCode)->first()
-            : null;
-
-        return view('dashboard.reports.weight-based-report', [
-            'sales' => $sales,
-            'selectedGrnCode' => $grnCode,
-            'selectedGrnEntry' => $selectedGrnEntry,
-            'startDate' => $startDate,
-            'endDate' => $endDate,
-            'filters' => $request->all(),
-        ]);
+    // Choose base query depending on date range
+    if ($startDate && $endDate) {
+        $query = SalesHistory::selectRaw('item_name, item_code, SUM(packs) as packs, SUM(weight) as weight, SUM(total) as total')
+            ->whereBetween('Date', [
+                Carbon::parse($startDate)->startOfDay(),
+                Carbon::parse($endDate)->endOfDay()
+            ]);
+    } else {
+        $query = Sale::selectRaw('item_name, item_code, SUM(packs) as packs, SUM(weight) as weight, SUM(total) as total');
     }
+
+    // Filter by GRN code if given
+    if (!empty($grnCode)) {
+        $query->where('code', $grnCode);
+    }
+
+    // Group by item name & code
+    $sales = $query->groupBy('item_name', 'item_code')
+        ->orderBy('item_name', 'asc')
+        ->get();
+
+    // Only fetch GRN entry if code given
+    $selectedGrnEntry = !empty($grnCode)
+        ? GrnEntry::where('code', $grnCode)->first()
+        : null;
+
+    return response()->json([
+        'sales' => $sales,
+        'selectedGrnCode' => $grnCode,
+        'selectedGrnEntry' => $selectedGrnEntry,
+        'startDate' => $startDate,
+        'endDate' => $endDate,
+        'filters' => $request->all(),
+    ]);
+}
     public function getGrnSalecodereport(Request $request)
     {
         $grnCode = $request->input('grn_code');

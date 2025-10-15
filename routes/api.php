@@ -41,3 +41,4 @@ Route::get('/grn-entries/code/{code}', [GrnEntryController::class, 'getByCode'])
 //Reports
 Route::get('/allitems', [ReportController::class, 'fetchItems']);
 Route::get('/item-report', [ReportController::class, 'itemReport']);
+Route::post('/report/weight', [ReportController::class, 'getweight']);
