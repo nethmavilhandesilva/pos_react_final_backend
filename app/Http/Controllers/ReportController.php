@@ -6,6 +6,7 @@ use Mpdf\Mpdf;
 use App\Models\CustomersLoan;
 use App\Models\IncomeExpenses;
 use App\Models\SalesHistory;
+use App\Models\Supplier;
 use Illuminate\Http\Request;
 use App\Models\Sale;
 use App\Models\Item;
@@ -233,14 +234,10 @@ public function getGrnSalecodereport(Request $request)
         'settingDate' => $formattedDate
     ]);
 }
-
-
-
-   public function getGrnSalesOverviewReport2()
+public function getGrnSalesOverviewReport2()
 {
-    // Fetch all GRN entries
+    // Your existing logic...
     $grnEntries = GrnEntry::all();
-
     $reportData = [];
 
     // Group entries by item_name
@@ -303,8 +300,14 @@ public function getGrnSalecodereport(Request $request)
         ];
     })->values();
 
-    return view('dashboard.reports.grn_sales_overview_report2', [
-        'reportData' => $finalReportData
+    $companyName = Setting::value('CompanyName') ?? 'Default Company';
+    $settingDate = Setting::value('value');
+    $formattedDate = $settingDate ? Carbon::parse($settingDate)->format('Y-m-d') : Carbon::now()->format('Y-m-d');
+
+    return response()->json([
+        'reportData' => $finalReportData,
+        'companyName' => $companyName,
+        'settingDate' => $formattedDate
     ]);
 }
     public function downloadReport(Request $request, $reportType, $format)
@@ -691,53 +694,64 @@ public function getGrnSalecodereport(Request $request)
             'totalDamages'
         ));
     }
-  public function salesReport(Request $request)
+  public function getSuppliers()
 {
-    // Determine which table to query
+    $suppliers = Supplier::select('code', 'name')->get();
+    return response()->json(['suppliers' => $suppliers]);
+}
+
+public function getCustomers()
+{
+    $customers = Sale::select('customer_code')->distinct()->get();
+    return response()->json(['customers' => $customers]);
+}
+
+public function getBillNumbers()
+{
+    $billNos = Sale::select('bill_no')->whereNotNull('bill_no')->where('bill_no', '<>', '')->distinct()->get();
+    return response()->json(['billNos' => $billNos]);
+}
+
+public function getCompanyInfo()
+{
+    $companyName = Setting::value('CompanyName') ?? 'Default Company';
+    $settingDate = Setting::value('value');
+    $formattedDate = $settingDate ? Carbon::parse($settingDate)->format('Y-m-d') : Carbon::now()->format('Y-m-d');
+
+    return response()->json([
+        'companyName' => $companyName,
+        'settingDate' => $formattedDate
+    ]);
+}
+
+public function salesReport(Request $request)
+{
+    // Your existing logic...
     $useHistory = $request->filled('start_date') || $request->filled('end_date');
 
-    // Use SalesHistory if date range is provided, otherwise Sale
     $query = $useHistory
         ? SalesHistory::query()
         : Sale::query();
 
-    // Include only processed sales
     $query->where('Processed', 'Y');
 
-    // Supplier filter
+    // Apply filters...
     if ($request->filled('supplier_code')) {
         $query->where('supplier_code', $request->supplier_code);
     }
 
-    // Item filter
     if ($request->filled('item_code')) {
         $query->where('item_code', $request->item_code);
     }
 
-    // Customer short name filter
-    if ($request->filled('customer_short_name')) {
-        $search = $request->customer_short_name;
-        $query->where(function ($q) use ($search) {
-            $q->where('customer_code', 'like', '%' . $search . '%')
-                ->orWhereIn('customer_code', function ($sub) use ($search) {
-                    $sub->select('short_name')
-                        ->from('customers')
-                        ->where('name', 'like', '%' . $search . '%');
-                });
-        });
-    }
-
-    // Customer code filter
     if ($request->filled('customer_code')) {
         $query->where('customer_code', $request->customer_code);
     }
 
-    // Bill No filter
     if ($request->filled('bill_no')) {
         $query->where('bill_no', $request->bill_no);
     }
 
-    // Date range filter (only applied if provided)
     if ($request->filled('start_date') && $request->filled('end_date')) {
         $query->whereBetween('Date', [$request->start_date, $request->end_date]);
     } elseif ($request->filled('start_date')) {
@@ -746,13 +760,13 @@ public function getGrnSalecodereport(Request $request)
         $query->where('Date', '<=', $request->end_date);
     }
 
-    // Order by sales ID in descending order (highest first)
     $query->orderBy('id', 'DESC');
-
-    // Get all processed sales (no grouping by bill number)
     $salesData = $query->get();
 
-    return view('dashboard.reports.new_sales_report', compact('salesData'));
+    return response()->json([
+        'salesData' => $salesData,
+        'filters' => $request->all()
+    ]);
 }
 
     public function grnReport(Request $request)
