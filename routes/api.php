@@ -44,3 +44,4 @@ Route::get('/item-report', [ReportController::class, 'itemReport']);
 Route::post('/report/weight', [ReportController::class, 'getweight']);
 Route::get('/grncodes', [ReportController::class, 'getGrnEntries']);
 Route::post('/report/sale-code', [ReportController::class, 'getGrnSalecodereport']);
+Route::post('/reports/salesadjustment/filter', [ReportController::class, 'salesAdjustmentReport']);

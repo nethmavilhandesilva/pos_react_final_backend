@@ -181,93 +181,7 @@ public function getGrnSalecodereport(Request $request)
         'filters' => $request->all(),
     ]);
 }
-    public function getSalesFilterReport(Request $request)
-    {
-        $startDate = $request->input('start_date');
-        $endDate = $request->input('end_date');
-
-        // Determine which model to query based on the presence of a date range
-        if ($startDate && $endDate) {
-            // If both start_date and end_date are provided, query Salesadjustment
-            $query = SalesHistory::query();
-
-            // Apply the date range filter using Carbon for robustness
-            $query->whereBetween('Date', [
-                Carbon::parse($startDate)->startOfDay(),
-                Carbon::parse($endDate)->endOfDay()
-            ]);
-
-        } else {
-            // Otherwise, query Sale (default behavior)
-            $query = Sale::query();
-        }
-
-        // Apply other filters if present, regardless of the chosen model
-        if ($request->filled('supplier_code')) {
-            $query->where('supplier_code', $request->input('supplier_code'));
-        }
-
-        if ($request->filled('customer_code')) {
-            $query->where('customer_code', $request->input('customer_code'));
-        }
-
-        if ($request->filled('item_code')) {
-            $query->where('item_code', $request->input('item_code'));
-        }
-
-        // Apply ordering
-        switch ($request->input('order_by', 'id_desc')) { // Default to id_desc
-            case 'id_asc':
-                $query->orderBy('id', 'asc');
-                break;
-            case 'customer_code_asc':
-                $query->orderBy('customer_code', 'asc');
-                break;
-            case 'customer_code_desc':
-                $query->orderBy('customer_code', 'desc');
-                break;
-            case 'item_name_asc':
-                $query->orderBy('item_name', 'asc');
-                break;
-            case 'item_name_desc':
-                $query->orderBy('item_name', 'desc');
-                break;
-            case 'total_desc':
-                $query->orderBy('total', 'desc');
-                break;
-            case 'total_asc':
-                $query->orderBy('total', 'asc');
-                break;
-            case 'weight_desc':
-                $query->orderBy('weight', 'desc');
-                break;
-            case 'weight_asc':
-                $query->orderBy('weight', 'asc');
-                break;
-            case 'id_desc':
-            default:
-                $query->orderBy('id', 'desc');
-                break;
-        }
-
-        $sales = $query->get([
-            'code',
-            'packs',
-            'item_name',
-            'weight',
-            'price_per_kg',
-            'total',
-            'bill_no',
-            'customer_code',
-            'created_at' // Ensure created_at is selected for date filtering
-        ]);
-
-        // Calculate grand total
-        $grandTotal = $sales->sum('total');
-
-        // Pass data to the report view
-        return view('dashboard.reports.sales_filter_report', compact('sales', 'grandTotal', 'request'));
-    }
+    
     public function getGrnSalesOverviewReport()
 {
     // Fetch all GRN entries
@@ -659,40 +573,45 @@ public function getGrnSalecodereport(Request $request)
 
         return [$reportData, $headings, $reportTitle, $meta ?? []];
     }
-    public function salesAdjustmentReport(Request $request)
-    {
-        $code = $request->input('code');
-        $startDate = $request->input('start_date');
-        $endDate = $request->input('end_date');
+  public function salesAdjustmentReport(Request $request)
+{
+    $code = $request->input('code');
+    $startDate = $request->input('start_date');
+    $endDate = $request->input('end_date');
 
-        $settingDate = Setting::value('value');
+    $settingDate = Setting::value('value');
 
-        $query = Salesadjustment::query();
+    $query = Salesadjustment::query();
 
-        // If user did NOT select a date range → use settingDate filter
-        if (!$startDate && !$endDate) {
-            $query->whereDate('Date', $settingDate);
-        } else {
-            // If date range is provided → filter using Date column
-            if ($startDate) {
-                $query->whereDate('Date', '>=', $startDate);
-            }
-            if ($endDate) {
-                $query->whereDate('Date', '<=', $endDate);
-            }
+    // If user did NOT select a date range → use settingDate filter
+    if (!$startDate && !$endDate) {
+        $query->whereDate('Date', $settingDate);
+    } else {
+        // If date range is provided → filter using Date column
+        if ($startDate) {
+            $query->whereDate('Date', '>=', $startDate);
         }
-
-        // Apply code filter if provided
-        if ($code) {
-            $query->where('code', $code);
+        if ($endDate) {
+            $query->whereDate('Date', '<=', $endDate);
         }
-
-        // Final results
-        $entries = $query->orderBy('created_at', 'desc')->paginate(20);
-
-        return view('dashboard.reports.salesadjustment', compact('entries', 'code', 'startDate', 'endDate'));
     }
 
+    // Apply code filter if provided
+    if ($code) {
+        $query->where('code', $code);
+    }
+
+    // Final results with pagination
+    $entries = $query->orderBy('created_at', 'desc')->paginate(20);
+
+    return response()->json([
+        'entries' => $entries,
+        'code' => $code,
+        'startDate' => $startDate,
+        'endDate' => $endDate,
+        'filters' => $request->all(),
+    ]);
+}
 
     public function financialReport()
     {
