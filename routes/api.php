@@ -7,6 +7,7 @@ use App\Http\Controllers\SupplierController;
 use App\Http\Controllers\GrnEntryController;
 use App\Http\Controllers\CustomersLoanController;
 use App\Http\Controllers\ReportController;
+use App\Http\Controllers\AuthController;
 
 //CUSTOMERS
 Route::get('/customers', [CustomerController::class, 'apiIndex']);
@@ -57,3 +58,5 @@ Route::prefix('reports')->group(function () {
     Route::post('/download-pdf', [ReportController::class, 'downloadPDF']);
     Route::post('/download-excel', [ReportController::class, 'downloadExcel']);
 });
+Route::post('/register', [AuthController::class, 'register']);
+Route::post('/login', [AuthController::class, 'login']);
