@@ -2,10 +2,6 @@
 
 use App\Http\Controllers\ProfileController;
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\ItemController;
-use App\Http\Controllers\CustomerController;
-use App\Http\Controllers\SupplierController;
-use App\Http\Controllers\GrnEntryController;
 use App\Http\Controllers\SalesEntryController; // ✅ Correct use statement
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\Auth\RegisteredUserController;
@@ -61,7 +57,6 @@ Route::post('/update-grn-stock', [SalesEntryController::class, 'updateGrnRemaini
 
 // Reports
 Route::get('/report', [ReportController::class, 'index'])->name('report.index');
-Route::post('/report/download/{reportType}/{format}', [ReportController::class, 'downloadReport'])->name('report.download');
 Route::get('/financial-report', [ReportController::class, 'financialReport'])->name('financial.report');
 Route::get('/grn-report', [ReportController::class, 'grnReport'])->name('grn.report');
 Route::get('/returns-report', [ReportController::class, 'returnsReport']) ->name('returns.report');
@@ -102,14 +97,7 @@ Route::get('/sales/report', [ReportController::class, 'salesfinalReport'])->name
 Route::get('/send-financial-report', [ReportController::class, 'sendFinancialReportEmail'])->name('send.financial.report');
 Route::get('/report/loans/email-simple', [ReportController::class, 'sendLoanReportEmail'])->name('report.loans.email-simple');
 Route::get('/grn/send-email', [ReportController::class, 'sendGrnEmail'])->name('grn.sendEmail'); 
-//exports
-Route::get('/sales-adjustment-report/excel', [ReportController::class, 'exportToExcel'])->name('sales-adjustment.export.excel');
-Route::get('/sales-adjustment-report/pdf', [ReportController::class, 'exportToPdf'])->name('sales-adjustment.export.pdf');
-Route::get('/grn-sales-overview/download', [ReportController::class, 'downloadGrnSalesOverviewReport'])->name('grn-sales.download');
-Route::get('/grn-overview/download2', [ReportController::class, 'downloadGrnOverviewReport2'])->name('grn-overview.download2');
-Route::get('/sales-report/download', [ReportController::class, 'downloadSalesReport'])->name('sales.report.download');
-Route::get('/grn/export/pdf', [ReportController::class, 'exportPdf'])->name('grn.exportPdf');
-Route::get('/grn/export/excel', [ReportController::class, 'exportExcel'])->name('grn.exportExcel');
+
 Route::get('/reports/cheque-payments', [ReportController::class, 'chequePaymentsReport']) ->name('reports.cheque-payments');
 Route::post('/reports/update-status/{id}', [ReportController::class, 'updateStatus'])  ->name('reports.update-status');
 Route::get('/generate-report', [ReportController::class, 'generateReport']) ->name('generate.report');//returns

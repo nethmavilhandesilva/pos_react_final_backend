@@ -1,8 +1,6 @@
 <?php
 
-
 namespace App\Http\Controllers;
-use Mpdf\Mpdf;
 use App\Models\CustomersLoan;
 use App\Models\IncomeExpenses;
 use App\Models\SalesHistory;
@@ -12,11 +10,6 @@ use App\Models\Sale;
 use App\Models\Item;
 use App\Models\GrnEntry;// Replace with your actual model name
 use Carbon\Carbon;
-use Maatwebsite\Excel\Facades\Excel;
-use Barryvdh\DomPDF\Facade\Pdf;
-use App\Exports\DynamicReportExport;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use App\Models\Salesadjustment;
 use App\Mail\DailyReportMail;
 use Illuminate\Support\Facades\Mail;
@@ -32,15 +25,10 @@ use App\Mail\GrnSalesOverviewMail;
 use App\Mail\SalesReportMail;
 use App\Mail\FinancialReportMail;
 use App\Mail\LoanReportMail;
-use Mpdf\Config\ConfigVariables;
-use Mpdf\Config\FontVariables;
-use App\Exports\SalesAdjustmentsExport;
 use App\Mail\GrnbladeReportMail;
-use App\Exports\GrnExport;
 use App\Mail\CombinedReportsMail;
 use App\Mail\CombinedReportsMail2;
 use App\Models\GrnEntry2;
-use App\Exports\GrnOverviewExport;
 
 
 class ReportController extends Controller
@@ -48,63 +36,63 @@ class ReportController extends Controller
     public function fetchItems()
     {
         $items = Item::select('no', 'type')->get();
-        
+
         return response()->json([
             'items' => $items
         ]);
     }
 
     public function itemReport(Request $request)
-{
-    // Log the incoming request for debugging
-    \Log::info('Item Report Request:', $request->all());
+    {
+        // Log the incoming request for debugging
+        \Log::info('Item Report Request:', $request->all());
 
-    // Get parameters - try different possible names
-    $itemCode = $request->query('item_code') ?? $request->query('item_code');
-    
-    $startDate = $request->query('start_date');
-    $endDate = $request->query('end_date');
+        // Get parameters - try different possible names
+        $itemCode = $request->query('item_code') ?? $request->query('item_code');
 
-    \Log::info("Searching for item: $itemCode, Date range: $startDate to $endDate");
+        $startDate = $request->query('start_date');
+        $endDate = $request->query('end_date');
 
-    if (!$itemCode) {
-        return response()->json(['error' => 'Item code is required'], 400);
+        \Log::info("Searching for item: $itemCode, Date range: $startDate to $endDate");
+
+        if (!$itemCode) {
+            return response()->json(['error' => 'Item code is required'], 400);
+        }
+
+        $query = Sale::query()->where('item_code', $itemCode);
+
+        // Apply date filters only if provided
+        if ($startDate) {
+            $query->whereDate('created_at', '>=', $startDate);
+        }
+
+        if ($endDate) {
+            $query->whereDate('created_at', '<=', $endDate);
+        }
+
+        $sales = $query->get();
+
+        \Log::info("Found {$sales->count()} sales records for item: $itemCode");
+
+        return response()->json([
+            'sales' => $sales,
+            'filters' => [
+                'item_code' => $itemCode,
+                'start_date' => $startDate,
+                'end_date' => $endDate,
+                'record_count' => $sales->count()
+            ]
+        ]);
     }
+    public function getweight(Request $request)
+    {
+        $grnCode = $request->input('grn_code');
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
 
-    $query = Sale::query()->where('item_code', $itemCode);
-
-    // Apply date filters only if provided
-    if ($startDate) {
-        $query->whereDate('created_at', '>=', $startDate);
-    }
-    
-    if ($endDate) {
-        $query->whereDate('created_at', '<=', $endDate);
-    }
-
-    $sales = $query->get();
-
-    \Log::info("Found {$sales->count()} sales records for item: $itemCode");
-
-    return response()->json([
-        'sales' => $sales,
-        'filters' => [
-            'item_code' => $itemCode,
-            'start_date' => $startDate,
-            'end_date' => $endDate,
-            'record_count' => $sales->count()
-        ]
-    ]);
-}
- public function getweight(Request $request)
-{
-    $grnCode = $request->input('grn_code');
-    $startDate = $request->input('start_date');
-    $endDate = $request->input('end_date');
-
-    // Determine whether to use SalesHistory or Sale
-    if ($startDate && $endDate) {
-        $query = SalesHistory::selectRaw('
+        // Determine whether to use SalesHistory or Sale
+        if ($startDate && $endDate) {
+            $query = SalesHistory::selectRaw('
                 sales_histories.item_name,
                 sales_histories.item_code,
                 SUM(sales_histories.price_per_kg) as price_per_kg,
@@ -113,13 +101,13 @@ class ReportController extends Controller
                 SUM(sales_histories.total) as total,
                 items.pack_due
             ')
-            ->leftJoin('items', 'sales_histories.item_code', '=', 'items.no')
-            ->whereBetween('sales_histories.Date', [
-                Carbon::parse($startDate)->startOfDay(),
-                Carbon::parse($endDate)->endOfDay()
-            ]);
-    } else {
-        $query = Sale::selectRaw('
+                ->leftJoin('items', 'sales_histories.item_code', '=', 'items.no')
+                ->whereBetween('sales_histories.Date', [
+                    Carbon::parse($startDate)->startOfDay(),
+                    Carbon::parse($endDate)->endOfDay()
+                ]);
+        } else {
+            $query = Sale::selectRaw('
                 sales.item_name,
                 sales.item_code,
                 SUM(sales.price_per_kg) as price_per_kg,
@@ -128,570 +116,248 @@ class ReportController extends Controller
                 SUM(sales.total) as total,
                 items.pack_due
             ')
-            ->leftJoin('items', 'sales.item_code', '=', 'items.no');
+                ->leftJoin('items', 'sales.item_code', '=', 'items.no');
+        }
+
+        // Filter by GRN code if provided
+        if (!empty($grnCode)) {
+            $query->where('sales.code', $grnCode)
+                ->orWhere('sales_histories.code', $grnCode);
+        }
+
+        // Group by item and pack_due (since it's per item)
+        $sales = $query->groupBy('sales.item_name', 'sales.item_code', 'items.pack_due')
+            ->orderBy('sales.item_name', 'asc')
+            ->get();
+
+        // Fetch GRN entry if a code is given
+        $selectedGrnEntry = !empty($grnCode)
+            ? GrnEntry::where('code', $grnCode)->first()
+            : null;
+
+        return response()->json([
+            'sales' => $sales,
+            'selectedGrnCode' => $grnCode,
+            'selectedGrnEntry' => $selectedGrnEntry,
+            'startDate' => $startDate,
+            'endDate' => $endDate,
+            'filters' => $request->all(),
+        ]);
     }
-
-    // Filter by GRN code if provided
-    if (!empty($grnCode)) {
-        $query->where('sales.code', $grnCode)
-              ->orWhere('sales_histories.code', $grnCode);
-    }
-
-    // Group by item and pack_due (since it's per item)
-    $sales = $query->groupBy('sales.item_name', 'sales.item_code', 'items.pack_due')
-        ->orderBy('sales.item_name', 'asc')
-        ->get();
-
-    // Fetch GRN entry if a code is given
-    $selectedGrnEntry = !empty($grnCode)
-        ? GrnEntry::where('code', $grnCode)->first()
-        : null;
-
-    return response()->json([
-        'sales' => $sales,
-        'selectedGrnCode' => $grnCode,
-        'selectedGrnEntry' => $selectedGrnEntry,
-        'startDate' => $startDate,
-        'endDate' => $endDate,
-        'filters' => $request->all(),
-    ]);
-}
 
     public function getGrnEntries()
-{
-    $entries = GrnEntry::select('code', 'supplier_code', 'item_code', 'item_name', 'packs', 'grn_no', 'txn_date')
-        ->orderBy('created_at', 'desc')
-        ->get();
-        
-    return response()->json([
-        'entries' => $entries
-    ]);
-}
+    {
+        $entries = GrnEntry::select('code', 'supplier_code', 'item_code', 'item_name', 'packs', 'grn_no', 'txn_date')
+            ->orderBy('created_at', 'desc')
+            ->get();
 
-public function getGrnSalecodereport(Request $request)
-{
-    $grnCode = $request->input('grn_code');
-    $startDate = $request->input('start_date');
-    $endDate = $request->input('end_date');
-
-    if (!$grnCode) {
-        return response()->json(['error' => 'GRN code is required'], 400);
-    }
-
-    // Your existing logic...
-    if ($startDate && $endDate) {
-        $query = SalesHistory::query();
-        $query->whereBetween('Date', [
-            Carbon::parse($startDate)->startOfDay(),
-            Carbon::parse($endDate)->endOfDay()
+        return response()->json([
+            'entries' => $entries
         ]);
-    } else {
-        $query = Sale::query();
     }
 
-    $query->where('code', $grnCode);
-    $sales = $query->orderBy('created_at', 'asc')->get();
-    $selectedGrnEntry = GrnEntry::where('code', $grnCode)->first();
+    public function getGrnSalecodereport(Request $request)
+    {
+        $grnCode = $request->input('grn_code');
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
 
-    return response()->json([
-        'sales' => $sales,
-        'selectedGrnCode' => $grnCode,
-        'selectedGrnEntry' => $selectedGrnEntry,
-        'startDate' => $startDate,
-        'endDate' => $endDate,
-        'filters' => $request->all(),
-    ]);
-}
-    
+        if (!$grnCode) {
+            return response()->json(['error' => 'GRN code is required'], 400);
+        }
+
+        // Your existing logic...
+        if ($startDate && $endDate) {
+            $query = SalesHistory::query();
+            $query->whereBetween('Date', [
+                Carbon::parse($startDate)->startOfDay(),
+                Carbon::parse($endDate)->endOfDay()
+            ]);
+        } else {
+            $query = Sale::query();
+        }
+
+        $query->where('code', $grnCode);
+        $sales = $query->orderBy('created_at', 'asc')->get();
+        $selectedGrnEntry = GrnEntry::where('code', $grnCode)->first();
+
+        return response()->json([
+            'sales' => $sales,
+            'selectedGrnCode' => $grnCode,
+            'selectedGrnEntry' => $selectedGrnEntry,
+            'startDate' => $startDate,
+            'endDate' => $endDate,
+            'filters' => $request->all(),
+        ]);
+    }
+
     public function getGrnSalesOverviewReport()
-{
-    // Your existing logic...
-    $grnEntries = GrnEntry::all();
-    $reportData = [];
+    {
+        // Your existing logic...
+        $grnEntries = GrnEntry::all();
+        $reportData = [];
 
-    foreach ($grnEntries->groupBy('code') as $code => $entries) {
-        // Your existing calculation logic...
-        $totalOriginalPacks = $entries->sum('original_packs');
-        $totalOriginalWeight = $entries->sum('original_weight');
+        foreach ($grnEntries->groupBy('code') as $code => $entries) {
+            // Your existing calculation logic...
+            $totalOriginalPacks = $entries->sum('original_packs');
+            $totalOriginalWeight = $entries->sum('original_weight');
 
-        $currentSales = Sale::where('code', $code)->get();
-        $historicalSales = SalesHistory::where('code', $code)->get();
-        $relatedSales = $currentSales->merge($historicalSales);
-        $totalSalesValueForGrn = $relatedSales->sum('total');
-
-        $soldPacksFromSales = $relatedSales->sum('packs');
-        $soldWeightFromSales = $relatedSales->sum('weight');
-
-        $remainingPacks = $totalOriginalPacks - $soldPacksFromSales;
-        $remainingWeight = $totalOriginalWeight - $soldWeightFromSales;
-
-        $reportData[] = [
-            'date' => Carbon::parse($entries->first()->created_at)
-                ->timezone('Asia/Colombo')
-                ->format('Y-m-d H:i:s'),
-            'grn_code' => $code,
-            'item_name' => $entries->first()->item_name,
-            'sp' => $entries->first()->SalesKGPrice,
-            'original_packs' => $totalOriginalPacks,
-            'original_weight' => $totalOriginalWeight,
-            'total_sales_value' => $totalSalesValueForGrn,
-            'remaining_packs' => $remainingPacks,
-            'remaining_weight' => $remainingWeight,
-            'sold_packs' => $soldPacksFromSales,
-            'sold_weight' => $soldWeightFromSales,
-        ];
-    }
-
-    $reportData = collect($reportData)->sortBy('grn_code')->values();
-
-    $companyName = Setting::value('CompanyName') ?? 'Default Company';
-    $settingDate = Setting::value('value');
-    $formattedDate = $settingDate ? Carbon::parse($settingDate)->format('Y-m-d') : Carbon::now()->format('Y-m-d');
-
-    return response()->json([
-        'reportData' => $reportData,
-        'companyName' => $companyName,
-        'settingDate' => $formattedDate
-    ]);
-}
-public function getGrnSalesOverviewReport2()
-{
-    // Your existing logic...
-    $grnEntries = GrnEntry::all();
-    $reportData = [];
-
-    // Group entries by item_name
-    $grouped = $grnEntries->groupBy('item_name');
-
-    foreach ($grouped as $itemName => $entries) {
-        $originalPacks = 0;
-        $originalWeight = 0;
-        $soldPacks = 0;
-        $soldWeight = 0;
-        $totalSalesValue = 0;
-
-        foreach ($entries as $grnEntry) {
-            // Fetch all sales (current + history) for this GRN code
-            $currentSales = Sale::where('code', $grnEntry->code)->get();
-            $historicalSales = SalesHistory::where('code', $grnEntry->code)->get();
+            $currentSales = Sale::where('code', $code)->get();
+            $historicalSales = SalesHistory::where('code', $code)->get();
             $relatedSales = $currentSales->merge($historicalSales);
-
-            // Sold quantities and values
-            $totalSoldWeight = $relatedSales->sum('weight');
-            $totalSoldPacks = $relatedSales->sum('packs');
             $totalSalesValueForGrn = $relatedSales->sum('total');
 
-            // Add to totals
-            $originalPacks += $grnEntry->original_packs;
-            $originalWeight += $grnEntry->original_weight;
-            $soldPacks += $totalSoldPacks;
-            $soldWeight += $totalSoldWeight;
-            $totalSalesValue += $totalSalesValueForGrn;
+            $soldPacksFromSales = $relatedSales->sum('packs');
+            $soldWeightFromSales = $relatedSales->sum('weight');
+
+            $remainingPacks = $totalOriginalPacks - $soldPacksFromSales;
+            $remainingWeight = $totalOriginalWeight - $soldWeightFromSales;
+
+            $reportData[] = [
+                'date' => Carbon::parse($entries->first()->created_at)
+                    ->timezone('Asia/Colombo')
+                    ->format('Y-m-d H:i:s'),
+                'grn_code' => $code,
+                'item_name' => $entries->first()->item_name,
+                'sp' => $entries->first()->SalesKGPrice,
+                'original_packs' => $totalOriginalPacks,
+                'original_weight' => $totalOriginalWeight,
+                'total_sales_value' => $totalSalesValueForGrn,
+                'remaining_packs' => $remainingPacks,
+                'remaining_weight' => $remainingWeight,
+                'sold_packs' => $soldPacksFromSales,
+                'sold_weight' => $soldWeightFromSales,
+            ];
         }
 
-        // Compute remaining after summing everything
-        $remainingPacks = $originalPacks - $soldPacks;
-        $remainingWeight = $originalWeight - $soldWeight;
+        $reportData = collect($reportData)->sortBy('grn_code')->values();
 
-        // Add to report
-        $reportData[] = [
-            'item_name' => $itemName,
-            'original_packs' => $originalPacks,
-            'original_weight' => $originalWeight,
-            'sold_packs' => $soldPacks,
-            'sold_weight' => $soldWeight,
-            'remaining_packs' => $remainingPacks,
-            'remaining_weight' => $remainingWeight,
-            'total_sales_value' => $totalSalesValue,
-        ];
+        $companyName = Setting::value('CompanyName') ?? 'Default Company';
+        $settingDate = Setting::value('value');
+        $formattedDate = $settingDate ? Carbon::parse($settingDate)->format('Y-m-d') : Carbon::now()->format('Y-m-d');
+
+        return response()->json([
+            'reportData' => $reportData,
+            'companyName' => $companyName,
+            'settingDate' => $formattedDate
+        ]);
+    }
+    public function getGrnSalesOverviewReport2()
+    {
+        // Your existing logic...
+        $grnEntries = GrnEntry::all();
+        $reportData = [];
+
+        // Group entries by item_name
+        $grouped = $grnEntries->groupBy('item_name');
+
+        foreach ($grouped as $itemName => $entries) {
+            $originalPacks = 0;
+            $originalWeight = 0;
+            $soldPacks = 0;
+            $soldWeight = 0;
+            $totalSalesValue = 0;
+
+            foreach ($entries as $grnEntry) {
+                // Fetch all sales (current + history) for this GRN code
+                $currentSales = Sale::where('code', $grnEntry->code)->get();
+                $historicalSales = SalesHistory::where('code', $grnEntry->code)->get();
+                $relatedSales = $currentSales->merge($historicalSales);
+
+                // Sold quantities and values
+                $totalSoldWeight = $relatedSales->sum('weight');
+                $totalSoldPacks = $relatedSales->sum('packs');
+                $totalSalesValueForGrn = $relatedSales->sum('total');
+
+                // Add to totals
+                $originalPacks += $grnEntry->original_packs;
+                $originalWeight += $grnEntry->original_weight;
+                $soldPacks += $totalSoldPacks;
+                $soldWeight += $totalSoldWeight;
+                $totalSalesValue += $totalSalesValueForGrn;
+            }
+
+            // Compute remaining after summing everything
+            $remainingPacks = $originalPacks - $soldPacks;
+            $remainingWeight = $originalWeight - $soldWeight;
+
+            // Add to report
+            $reportData[] = [
+                'item_name' => $itemName,
+                'original_packs' => $originalPacks,
+                'original_weight' => $originalWeight,
+                'sold_packs' => $soldPacks,
+                'sold_weight' => $soldWeight,
+                'remaining_packs' => $remainingPacks,
+                'remaining_weight' => $remainingWeight,
+                'total_sales_value' => $totalSalesValue,
+            ];
+        }
+
+        // Group and sum by item_name to combine duplicates
+        $finalReportData = collect($reportData)->groupBy('item_name')->map(function ($group) {
+            return [
+                'item_name' => $group->first()['item_name'],
+                'original_packs' => $group->sum('original_packs'),
+                'original_weight' => $group->sum('original_weight'),
+                'sold_packs' => $group->sum('sold_packs'),
+                'sold_weight' => $group->sum('sold_weight'),
+                'remaining_packs' => $group->sum('remaining_packs'),
+                'remaining_weight' => $group->sum('remaining_weight'),
+                'total_sales_value' => $group->sum('total_sales_value'),
+            ];
+        })->values();
+
+        $companyName = Setting::value('CompanyName') ?? 'Default Company';
+        $settingDate = Setting::value('value');
+        $formattedDate = $settingDate ? Carbon::parse($settingDate)->format('Y-m-d') : Carbon::now()->format('Y-m-d');
+
+        return response()->json([
+            'reportData' => $finalReportData,
+            'companyName' => $companyName,
+            'settingDate' => $formattedDate
+        ]);
     }
 
-    // Group and sum by item_name to combine duplicates
-    $finalReportData = collect($reportData)->groupBy('item_name')->map(function ($group) {
-        return [
-            'item_name' => $group->first()['item_name'],
-            'original_packs' => $group->sum('original_packs'),
-            'original_weight' => $group->sum('original_weight'),
-            'sold_packs' => $group->sum('sold_packs'),
-            'sold_weight' => $group->sum('sold_weight'),
-            'remaining_packs' => $group->sum('remaining_packs'),
-            'remaining_weight' => $group->sum('remaining_weight'),
-            'total_sales_value' => $group->sum('total_sales_value'),
-        ];
-    })->values();
-
-    $companyName = Setting::value('CompanyName') ?? 'Default Company';
-    $settingDate = Setting::value('value');
-    $formattedDate = $settingDate ? Carbon::parse($settingDate)->format('Y-m-d') : Carbon::now()->format('Y-m-d');
-
-    return response()->json([
-        'reportData' => $finalReportData,
-        'companyName' => $companyName,
-        'settingDate' => $formattedDate
-    ]);
-}
-    public function downloadReport(Request $request, $reportType, $format)
+    public function salesAdjustmentReport(Request $request)
     {
-        // Fetch report data
-        list($reportData, $headings, $reportTitle, $meta) = $this->getReportData($reportType, $request->all());
+        $code = $request->input('code');
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
 
-        // ------------------ EXCEL ------------------
-        if ($format === 'excel') {
-            $filename = str_replace(' ', '-', $reportTitle) . '_' . Carbon::now()->format('Y-m-d') . '.xlsx';
-            return Excel::download(new DynamicReportExport($reportData, $headings), $filename);
-        }
+        $settingDate = Setting::value('value');
 
-        // ------------------ PDF (mPDF) ------------------
-        if ($format === 'pdf') {
-            $filename = str_replace(' ', '-', $reportTitle) . '_' . Carbon::now()->format('Y-m-d') . '.pdf';
+        $query = Salesadjustment::query();
 
-            try {
-                // Initialize mPDF with Sinhala font
-                $mpdf = new Mpdf([
-                    'mode' => 'utf-8',
-                    'format' => 'A4',
-                    'default_font' => 'notosanssinhala',
-                    'margin_top' => 15,
-                    'margin_bottom' => 15,
-                    'margin_left' => 10,
-                    'margin_right' => 10,
-                    'fontDir' => [public_path('fonts')],
-                    'fontdata' => [
-                        'notosanssinhala' => [
-                            'R' => 'NotoSansSinhala-Regular.ttf',
-                            'B' => 'NotoSansSinhala-Bold.ttf',
-                        ]
-                    ],
-                ]);
-
-                // Render Blade view as HTML
-                $html = view('reports.generic_report_pdf', compact('reportData', 'headings', 'reportTitle', 'meta'))->render();
-
-                $mpdf->WriteHTML($html);
-                return $mpdf->Output($filename, 'D'); // Download PDF
-
-            } catch (\Exception $e) {
-                Log::error("PDF generation failed: " . $e->getMessage(), [
-                    'reportType' => $reportType,
-                    'filename' => $filename,
-                    'error_file' => $e->getFile(),
-                    'error_line' => $e->getLine(),
-                ]);
-                return back()->with('error', 'PDF generation failed: ' . $e->getMessage());
+        // If user did NOT select a date range → use settingDate filter
+        if (!$startDate && !$endDate) {
+            $query->whereDate('Date', $settingDate);
+        } else {
+            // If date range is provided → filter using Date column
+            if ($startDate) {
+                $query->whereDate('Date', '>=', $startDate);
+            }
+            if ($endDate) {
+                $query->whereDate('Date', '<=', $endDate);
             }
         }
 
-        abort(404, 'Invalid report format.');
-    }
-  protected function getReportData($reportType, $filters = [])
-    {
-        $reportData = collect();
-        $headings = [];
-        $reportTitle = 'Report';
-        $meta = []; // ✅ Always initialize
-
-
-        switch ($reportType) {
-              case 'item-wise-report':
-                $reportTitle = 'Item-wise Report';
-
-                $query = Sale::query()
-                    ->when(isset($filters['item_code']), fn($q) => $q->where('item_code', $filters['item_code']))
-                    ->when(isset($filters['supplier_code']) && $filters['supplier_code'] !== 'all', fn($q) => $q->where('supplier_code', $filters['supplier_code']))
-                    ->when(isset($filters['start_date']), fn($q) => $q->whereDate('created_at', '>=', $filters['start_date']))
-                    ->when(isset($filters['end_date']), fn($q) => $q->whereDate('created_at', '<=', $filters['end_date']));
-
-                $records = $query->get();
-
-                $meta = [
-                    'Item' => $records->first() ? $records->first()->item_name . ' (' . $records->first()->item_code . ')' : null,
-                ];
-
-                $headings = ['බිල් අංකය', 'මලු', 'බර', 'මිල', 'එකතුව', 'ගෙණුම්කරු', 'GRN අංකය'];
-
-                $reportData = $records->map(fn($row) => [
-                    $row->bill_no,
-                    $row->packs,
-                    $row->weight,
-                    $row->price_per_kg,
-                    $row->total,
-                    $row->customer_code,
-                    $row->code,
-                ]);
-
-                // Totals row
-                $numericIndexes = [1, 2, 4]; // packs, weight, total
-                $totalsRow = [];
-                foreach ($reportData->first() ?? [] as $index => $val) {
-                    $totalsRow[$index] = in_array($index, $numericIndexes) ? $reportData->sum(fn($r) => $r[$index]) : ($index === 0 ? 'TOTAL' : '');
-                }
-                if ($reportData->isNotEmpty()) {
-                    $reportData->push($totalsRow);
-                }
-
-                break;
-
-            case 'grn-sales-report':
-                $reportTitle = 'GRN-based Sales Report';
-
-                // Determine whether to use SalesHistory or Sale based on date range
-                if (isset($filters['start_date']) && isset($filters['end_date'])) {
-                    $query = SalesHistory::selectRaw('
-            sales_histories.item_code,
-            MAX(sales_histories.item_name) as item_name,
-            SUM(sales_histories.price_per_kg) as price_per_kg,
-            SUM(sales_histories.packs) as packs,
-            SUM(sales_histories.weight) as weight,
-            SUM(sales_histories.total) as total,
-            MAX(items.pack_due) as pack_due
-        ')
-                        ->leftJoin('items', 'sales_histories.item_code', '=', 'items.no')
-                        ->whereBetween('sales_histories.Date', [
-                            Carbon::parse($filters['start_date'])->startOfDay(),
-                            Carbon::parse($filters['end_date'])->endOfDay()
-                        ]);
-                } else {
-                    $query = Sale::selectRaw('
-            sales.item_code,
-            MAX(sales.item_name) as item_name,
-            SUM(sales.price_per_kg) as price_per_kg,
-            SUM(sales.packs) as packs,
-            SUM(sales.weight) as weight,
-            SUM(sales.total) as total,
-            MAX(items.pack_due) as pack_due
-        ')
-                        ->leftJoin('items', 'sales.item_code', '=', 'items.no');
-                }
-
-                // Filter by GRN code if provided
-                if (isset($filters['grn_code'])) {
-                    $query->where(function ($q) use ($filters) {
-                        $q->where('sales.code', $filters['grn_code'])
-                            ->orWhere('sales_histories.code', $filters['grn_code']);
-                    });
-                }
-
-                // Group by item_code only
-                $records = $query->groupBy(
-                    isset($filters['start_date']) && isset($filters['end_date']) ? 'sales_histories.item_code' : 'sales.item_code'
-                )
-                    ->orderBy(
-                        isset($filters['start_date']) && isset($filters['end_date']) ? 'sales_histories.item_code' : 'sales.item_code',
-                        'asc'
-                    )
-                    ->get();
-
-                // Headings for Blade view - EXACTLY as in your blade file
-                $headings = ['අයිතම කේතය', 'වර්ගය', 'බර (kg)', 'මිල (Rs/kg)', 'මලු', 'මලු ගාස්තුව (Rs)', 'එකතුව (Rs)'];
-
-                // Initialize report data and totals - EXACTLY as in your blade file
-                $reportData = collect();
-                $totalWeight = 0;
-                $totalPacks = 0;
-                $totalAmount = 0;
-                $totalPackDueCost = 0;
-
-                foreach ($records as $record) {
-                    $itemCode = $record->item_code;
-                    $itemName = $record->item_name;
-                    $weight = $record->weight ?? 0;
-                    $pricePerKg = $record->price_per_kg ?? 0;
-                    $packs = $record->packs ?? 0;
-                    $packDue = $record->pack_due ?? 0;
-
-                    // Calculate EXACTLY as in your blade file
-                    $packDueCost = $packs * $packDue;
-                    $netTotal = $weight * $pricePerKg; // This is the key difference - using weight * price_per_kg
-
-                    $reportData->push([
-                        $itemCode,
-                        $itemName,
-                        number_format($weight, 2),
-                        number_format($pricePerKg, 2),
-                        number_format($packs, 0),
-                        number_format($packDueCost, 2),
-                        number_format($netTotal, 2),
-                    ]);
-
-                    // Update totals EXACTLY as in blade file
-                    $totalWeight += $weight;
-                    $totalPacks += $packs;
-                    $totalAmount += $netTotal;
-                    $totalPackDueCost += $packDueCost;
-                }
-
-                // Add empty row for separation (like the <hr> in blade)
-                $reportData->push(['', '', '', '', '', '', '']);
-
-                // Totals row - EXACTLY as in blade file's first totals row
-                $reportData->push([
-                    '', // Empty for item code
-                    'මුළු එකතුව:', // Note: In your blade this is in the second column
-                    number_format($totalWeight, 2),
-                    '', // Empty for price per kg
-                    number_format($totalPacks, 0),
-                    number_format($totalPackDueCost, 2),
-                    number_format($totalAmount, 2),
-                ]);
-
-                // Final total row - EXACTLY as in blade file's final row
-                $reportData->push([
-                    '',
-                    '',
-                    '',
-                    '',
-                    '',
-                    'අවසන් මුළු එකතුව:',
-                    number_format($totalAmount + $totalPackDueCost, 2),
-                ]);
-
-                break;
-
-            case 'grn-sale-code-report':
-                $reportTitle = 'GRN Code-based Sales Report';
-
-                $query = Sale::query()
-                    ->when(isset($filters['grn_code']), function ($query) use ($filters) {
-                        return $query->where('code', $filters['grn_code']);
-                    })
-                    ->when(isset($filters['start_date']), function ($query) use ($filters) {
-                        return $query->whereDate('created_at', '>=', $filters['start_date']);
-                    })
-                    ->when(isset($filters['end_date']), function ($query) use ($filters) {
-                        return $query->whereDate('created_at', '<=', $filters['end_date']);
-                    });
-
-                $records = $query->orderBy('created_at', 'asc')->get();
-                $meta = [
-                    'තෝරාගත් GRN කේතය' => $records->first() ? $records->first()->code : null,
-                ];
-
-                $headings = ['දිනය', 'බිල් අංකය', 'ගෙණුම්කරු කේතය', 'බර', 'මිල (1kg)', 'මලු', 'මුළු මුදල'];
-
-                $reportData = $records->map(function ($row) {
-                    return [
-                        $row->Date,
-                        $row->bill_no,
-                        $row->customer_code,
-                        $row->weight,
-                        $row->price_per_kg,
-                        $row->packs,
-                        $row->total,
-                    ];
-                });
-                // Totals row
-                $numericIndexes = [3, 5, 6]; // packs, weight, total
-                $totalsRow = [];
-                foreach ($reportData->first() ?? [] as $index => $val) {
-                    $totalsRow[$index] = in_array($index, $numericIndexes) ? $reportData->sum(fn($r) => $r[$index]) : ($index === 0 ? 'TOTAL' : '');
-                }
-                if ($reportData->isNotEmpty()) {
-                    $reportData->push($totalsRow);
-                }
-                break;
+        // Apply code filter if provided
+        if ($code) {
+            $query->where('code', $code);
         }
 
-        return [$reportData, $headings, $reportTitle, $meta ?? []];
+        // Final results with pagination
+        $entries = $query->orderBy('created_at', 'desc')->paginate(20);
+
+        return response()->json([
+            'entries' => $entries,
+            'code' => $code,
+            'startDate' => $startDate,
+            'endDate' => $endDate,
+            'filters' => $request->all(),
+        ]);
     }
-    // app/Http/Controllers/ReportController.php
-public function generateReport(Request $request)
-    {
-        try {
-            $reportType = $request->input('report_type');
-            $filters = $request->input('filters', []);
-            
-            list($reportData, $headings, $reportTitle, $meta) = $this->getReportData($reportType, $filters);
-            
-            return response()->json([
-                'reportData' => $reportData,
-                'headings' => $headings,
-                'reportTitle' => $reportTitle,
-                'meta' => $meta
-            ]);
-        } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
-        }
-    }
-
-   public function downloadPDF(Request $request)
-{
-    try {
-        $reportType = $request->input('report_type');
-        $filters = $request->input('filters', []);
-        
-        list($reportData, $headings, $reportTitle, $meta) = $this->getReportData($reportType, $filters);
-        
-        $pdf = PDF::loadView('reports.pdf-template', [
-            'reportData' => $reportData,
-            'headings' => $headings,
-            'reportTitle' => $reportTitle,
-            'meta' => $meta
-        ])->setPaper('a4', 'landscape')
-          ->setOption('defaultFont', 'Noto Sans Sinhala')
-          ->setOption('isRemoteEnabled', true); // Enable remote fonts
-
-        return $pdf->download("{$reportTitle}.pdf");
-        
-    } catch (\Exception $e) {
-        return response()->json(['error' => $e->getMessage()], 500);
-    }
-}
-
-    public function downloadExcel(Request $request)
-    {
-        try {
-            $reportType = $request->input('report_type');
-            $filters = $request->input('filters', []);
-            
-            list($reportData, $headings, $reportTitle, $meta) = $this->getReportData($reportType, $filters);
-            
-            return (new DynamicReportExport($reportData, $headings, $reportTitle, $meta))
-                ->download("{$reportTitle}.xlsx");
-                
-        } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
-        }
-    }
-
-  public function salesAdjustmentReport(Request $request)
-{
-    $code = $request->input('code');
-    $startDate = $request->input('start_date');
-    $endDate = $request->input('end_date');
-
-    $settingDate = Setting::value('value');
-
-    $query = Salesadjustment::query();
-
-    // If user did NOT select a date range → use settingDate filter
-    if (!$startDate && !$endDate) {
-        $query->whereDate('Date', $settingDate);
-    } else {
-        // If date range is provided → filter using Date column
-        if ($startDate) {
-            $query->whereDate('Date', '>=', $startDate);
-        }
-        if ($endDate) {
-            $query->whereDate('Date', '<=', $endDate);
-        }
-    }
-
-    // Apply code filter if provided
-    if ($code) {
-        $query->where('code', $code);
-    }
-
-    // Final results with pagination
-    $entries = $query->orderBy('created_at', 'desc')->paginate(20);
-
-    return response()->json([
-        'entries' => $entries,
-        'code' => $code,
-        'startDate' => $startDate,
-        'endDate' => $endDate,
-        'filters' => $request->all(),
-    ]);
-}
 
     public function financialReport()
     {
@@ -772,81 +438,80 @@ public function generateReport(Request $request)
             'totalDamages'
         ));
     }
-  public function getSuppliers()
-{
-    $suppliers = Supplier::select('code', 'name')->get();
-    return response()->json(['suppliers' => $suppliers]);
-}
-
-public function getCustomers()
-{
-    $customers = Sale::select('customer_code')->distinct()->get();
-    return response()->json(['customers' => $customers]);
-}
-
-public function getBillNumbers()
-{
-    $billNos = Sale::select('bill_no')->whereNotNull('bill_no')->where('bill_no', '<>', '')->distinct()->get();
-    return response()->json(['billNos' => $billNos]);
-}
-
-public function getCompanyInfo()
-{
-    $companyName = Setting::value('CompanyName') ?? 'Default Company';
-    $settingDate = Setting::value('value');
-    $formattedDate = $settingDate ? Carbon::parse($settingDate)->format('Y-m-d') : Carbon::now()->format('Y-m-d');
-
-    return response()->json([
-        'companyName' => $companyName,
-        'settingDate' => $formattedDate
-    ]);
-}
-
-public function salesReport(Request $request)
-{
-    // Your existing logic...
-    $useHistory = $request->filled('start_date') || $request->filled('end_date');
-
-    $query = $useHistory
-        ? SalesHistory::query()
-        : Sale::query();
-
-    $query->where('Processed', 'Y');
-
-    // Apply filters...
-    if ($request->filled('supplier_code')) {
-        $query->where('supplier_code', $request->supplier_code);
+    public function getSuppliers()
+    {
+        $suppliers = Supplier::select('code', 'name')->get();
+        return response()->json(['suppliers' => $suppliers]);
     }
 
-    if ($request->filled('item_code')) {
-        $query->where('item_code', $request->item_code);
+    public function getCustomers()
+    {
+        $customers = Sale::select('customer_code')->distinct()->get();
+        return response()->json(['customers' => $customers]);
     }
 
-    if ($request->filled('customer_code')) {
-        $query->where('customer_code', $request->customer_code);
+    public function getBillNumbers()
+    {
+        $billNos = Sale::select('bill_no')->whereNotNull('bill_no')->where('bill_no', '<>', '')->distinct()->get();
+        return response()->json(['billNos' => $billNos]);
     }
 
-    if ($request->filled('bill_no')) {
-        $query->where('bill_no', $request->bill_no);
+    public function getCompanyInfo()
+    {
+        $companyName = Setting::value('CompanyName') ?? 'Default Company';
+        $settingDate = Setting::value('value');
+        $formattedDate = $settingDate ? Carbon::parse($settingDate)->format('Y-m-d') : Carbon::now()->format('Y-m-d');
+
+        return response()->json([
+            'companyName' => $companyName,
+            'settingDate' => $formattedDate
+        ]);
     }
 
-    if ($request->filled('start_date') && $request->filled('end_date')) {
-        $query->whereBetween('Date', [$request->start_date, $request->end_date]);
-    } elseif ($request->filled('start_date')) {
-        $query->where('Date', '>=', $request->start_date);
-    } elseif ($request->filled('end_date')) {
-        $query->where('Date', '<=', $request->end_date);
+    public function salesReport(Request $request)
+    {
+        // Your existing logic...
+        $useHistory = $request->filled('start_date') || $request->filled('end_date');
+
+        $query = $useHistory
+            ? SalesHistory::query()
+            : Sale::query();
+
+        $query->where('Processed', 'Y');
+
+        // Apply filters...
+        if ($request->filled('supplier_code')) {
+            $query->where('supplier_code', $request->supplier_code);
+        }
+
+        if ($request->filled('item_code')) {
+            $query->where('item_code', $request->item_code);
+        }
+
+        if ($request->filled('customer_code')) {
+            $query->where('customer_code', $request->customer_code);
+        }
+
+        if ($request->filled('bill_no')) {
+            $query->where('bill_no', $request->bill_no);
+        }
+
+        if ($request->filled('start_date') && $request->filled('end_date')) {
+            $query->whereBetween('Date', [$request->start_date, $request->end_date]);
+        } elseif ($request->filled('start_date')) {
+            $query->where('Date', '>=', $request->start_date);
+        } elseif ($request->filled('end_date')) {
+            $query->where('Date', '<=', $request->end_date);
+        }
+
+        $query->orderBy('id', 'DESC');
+        $salesData = $query->get();
+
+        return response()->json([
+            'salesData' => $salesData,
+            'filters' => $request->all()
+        ]);
     }
-
-    $query->orderBy('id', 'DESC');
-    $salesData = $query->get();
-
-    return response()->json([
-        'salesData' => $salesData,
-        'filters' => $request->all()
-    ]);
-}
-
     public function grnReport(Request $request)
     {
         $code = $request->input('code');
@@ -947,11 +612,6 @@ public function salesReport(Request $request)
             'selectedCode' => $code,
         ]);
     }
-
-
-
-
-
     public function sendDailyReport()
     {
         // Group by item_code and aggregate
@@ -1088,12 +748,6 @@ public function salesReport(Request $request)
 
     public function emailItemWiseReport(Request $request)
     {
-        // This method is designed to be triggered by a POST request from a form.
-        // The "MethodNotAllowed" error indicates that the frontend is trying to use a GET request.
-        // Make sure the "Email" button is inside a <form> with method="POST" and its action
-        // attribute set to the correct route for this method.
-
-        // Start with the base query, replicating the logic from your itemWiseReport method
         $query = Sale::query();
 
         // Apply any filters from the request to the query
@@ -1384,99 +1038,7 @@ public function salesReport(Request $request)
         return back()->with('success', 'Loan report emailed successfully!');
     }
     // salesadjustment exports
-   public function exportToExcel(Request $request)
-    {
-        $code = $request->input('code');
-        $startDate = $request->input('start_date');
-        $endDate = $request->input('end_date');
 
-        // ✅ Get the Setting date value
-        $settingDate = Setting::value('value');
-        if (!$settingDate) {
-            $settingDate = now()->toDateString();
-        }
-
-        // ✅ Pass the setting date to the export class
-        return Excel::download(new SalesAdjustmentsExport($code, $startDate, $endDate, $settingDate), 'sales-adjustments.xlsx');
-    }
-
-    public function exportToPdf(Request $request)
-    {
-        $code = $request->input('code');
-        $startDate = $request->input('start_date');
-        $endDate = $request->input('end_date');
-
-        // ✅ Get the Setting date value
-        $settingDate = Setting::value('value');
-        if (!$settingDate) {
-            $settingDate = now()->toDateString();
-        }
-
-        $query = Salesadjustment::query();
-
-        // ✅ Apply filters
-        if ($code) {
-            $query->where('code', $code);
-        }
-        if ($startDate) {
-            $query->whereDate('created_at', '>=', $startDate);
-        }
-        if ($endDate) {
-            $query->whereDate('created_at', '<=', $endDate);
-        }
-
-        // ✅ Include only records where 'Date' = $settingDate
-        $query->whereDate('Date', $settingDate);
-
-        // Fetch the filtered entries
-        $entries = $query->orderBy('created_at', 'desc')->get();
-
-        $reportTitle = 'විකුණුම් වෙනස් කිරීම් වාර්තාව'; // Sales Adjustment Report
-
-        try {
-            // Configure mPDF
-            $defaultConfig = (new \Mpdf\Config\ConfigVariables())->getDefaults();
-            $fontDirs = $defaultConfig['fontDir'];
-
-            $defaultFontConfig = (new \Mpdf\Config\FontVariables())->getDefaults();
-            $fontData = $defaultFontConfig['fontdata'];
-
-            $mpdf = new \Mpdf\Mpdf([
-                'fontDir' => array_merge($fontDirs, [
-                    public_path('fonts')
-                ]),
-                'fontdata' => $fontData + [
-                    'notosanssinhala' => [
-                        'R' => 'NotoSansSinhala-Regular.ttf',
-                        'B' => 'NotoSansSinhala-Bold.ttf',
-                    ]
-                ],
-                'default_font' => 'notosanssinhala',
-                'mode' => 'utf-8',
-                'format' => 'A4-L', // A4 Landscape for more columns
-                'margin_top' => 15,
-                'margin_bottom' => 15,
-                'margin_left' => 10,
-                'margin_right' => 10,
-            ]);
-
-            // Pass filtered entries to the PDF view
-            $html = view('dashboard.reports.salesadjustment_pdf', compact('entries', 'reportTitle'))->render();
-
-            $mpdf->WriteHTML($html);
-            $filename = str_replace(' ', '-', $reportTitle) . '_' . \Carbon\Carbon::now()->format('Y-m-d') . '.pdf';
-
-            return $mpdf->Output($filename, 'D'); // 'D' for download
-
-        } catch (\Exception $e) {
-            \Log::error("PDF generation failed: " . $e->getMessage(), [
-                'filename' => $filename ?? 'N/A',
-                'error_file' => $e->getFile(),
-                'error_line' => $e->getLine(),
-            ]);
-            return back()->with('error', 'PDF generation failed: ' . $e->getMessage());
-        }
-    }
 
     private function prepareGrnSalesOverviewData()
     {
@@ -1520,309 +1082,7 @@ public function salesReport(Request $request)
 
         return $reportData;
     }
-   public function downloadGrnSalesOverviewReport(Request $request)
-{
-    $reportData = $this->prepareGrnSalesOverviewData();
-    $reportTitle = 'විකිණුම්/බර මත්තෙහි ඉතිරි වාර්තාව';
 
-    // Handle PDF format
-    if ($request->get('format') === 'pdf') {
-        $filename = str_replace(' ', '-', $reportTitle) . '_' . Carbon::now()->format('Y-m-d') . '.pdf';
-
-        try {
-            $defaultConfig = (new ConfigVariables())->getDefaults();
-            $fontDirs = $defaultConfig['fontDir'];
-            $defaultFontConfig = (new FontVariables())->getDefaults();
-            $fontData = $defaultFontConfig['fontdata'];
-
-            Log::info('Starting PDF generation for GRN Sales Overview Report.');
-
-            $mpdf = new Mpdf([
-                'fontDir' => array_merge($fontDirs, [public_path('fonts')]),
-                'fontdata' => $fontData + [
-                    'notosanssinhala' => [
-                        'R' => 'NotoSansSinhala-Regular.ttf',
-                        'B' => 'NotoSansSinhala-Bold.ttf',
-                    ]
-                ],
-                'default_font' => 'notosanssinhala',
-                'mode' => 'utf-8',
-                'format' => 'A4-L',
-                'margin_top' => 15,
-                'margin_bottom' => 15,
-                'margin_left' => 10,
-                'margin_right' => 10,
-            ]);
-
-            $html = view('dashboard.reports.grn_sales_overview_pdf', compact('reportData', 'reportTitle'))->render();
-
-            Log::debug('HTML content prepared successfully for PDF.', [
-                'html_preview' => substr($html, 0, 500) // Only log a short preview
-            ]);
-
-            $mpdf->WriteHTML($html);
-            Log::info('PDF writing completed successfully.');
-
-            return $mpdf->Output($filename, 'D');
-
-        } catch (\Throwable $e) {
-            // Capture full details for debugging
-            Log::error('PDF generation failed.', [
-                'error_message' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            // Also report to Laravel's exception handler (shows in storage/logs/laravel.log)
-            report($e);
-
-            return back()->with('error', 'PDF generation failed: ' . $e->getMessage());
-        }
-    }
-
-    // Handle Excel format
-    if ($request->get('format') === 'excel') {
-        Log::info('Generating Excel report for GRN Sales Overview.');
-        return Excel::download(new \App\Exports\GrnSalesOverviewExport($reportData), 'grn-sales-overview.xlsx');
-    }
-
-    Log::warning('Invalid export format requested.', [
-        'requested_format' => $request->get('format')
-    ]);
-
-    return back()->with('error', 'Invalid export format.');
-}
-
-
-  public function downloadGrnOverviewReport2(Request $request)
-{
-    try {
-        // Get the report data using the same logic as the controller method
-        $grnEntries = GrnEntry::all();
-        $reportData = [];
-
-        // Group entries by item_name
-        $grouped = $grnEntries->groupBy('item_name');
-
-        foreach ($grouped as $itemName => $entries) {
-            $originalPacks = 0;
-            $originalWeight = 0;
-            $soldPacks = 0;
-            $soldWeight = 0;
-            $totalSalesValue = 0;
-
-            foreach ($entries as $grnEntry) {
-                // Fetch all sales (current + history) for this GRN code
-                $currentSales = Sale::where('code', $grnEntry->code)->get();
-                $historicalSales = SalesHistory::where('code', $grnEntry->code)->get();
-                $relatedSales = $currentSales->merge($historicalSales);
-
-                // Sold quantities and values
-                $totalSoldWeight = $relatedSales->sum('weight');
-                $totalSoldPacks = $relatedSales->sum('packs');
-                $totalSalesValueForGrn = $relatedSales->sum('total');
-
-                // Add to totals
-                $originalPacks += $grnEntry->original_packs;
-                $originalWeight += $grnEntry->original_weight;
-                $soldPacks += $totalSoldPacks;
-                $soldWeight += $totalSoldWeight;
-                $totalSalesValue += $totalSalesValueForGrn;
-            }
-
-            // Compute remaining after summing everything
-            $remainingPacks = $originalPacks - $soldPacks;
-            $remainingWeight = $originalWeight - $soldWeight;
-
-            // Add to report
-            $reportData[] = [
-                'item_name' => $itemName,
-                'original_packs' => $originalPacks,
-                'original_weight' => $originalWeight,
-                'sold_packs' => $soldPacks,
-                'sold_weight' => $soldWeight,
-                'remaining_packs' => $remainingPacks,
-                'remaining_weight' => $remainingWeight,
-                'total_sales_value' => $totalSalesValue,
-            ];
-        }
-
-        // Group and sum by item_name to combine duplicates
-        $finalReportData = collect($reportData)->groupBy('item_name')->map(function ($group) {
-            return [
-                'item_name' => $group->first()['item_name'],
-                'original_packs' => $group->sum('original_packs'),
-                'original_weight' => $group->sum('original_weight'),
-                'sold_packs' => $group->sum('sold_packs'),
-                'sold_weight' => $group->sum('sold_weight'),
-                'remaining_packs' => $group->sum('remaining_packs'),
-                'remaining_weight' => $group->sum('remaining_weight'),
-                'total_sales_value' => $group->sum('total_sales_value'),
-            ];
-        })->values();
-
-        $reportTitle = 'ඉතිරි වාර්තාව';
-
-        // Excel export
-        if ($request->get('format') === 'excel') {
-            return Excel::download(new GrnOverviewExport($finalReportData->toArray()), 'stock-overview.xlsx');
-        }
-
-        // PDF export
-        if ($request->get('format') === 'pdf') {
-            $filename = str_replace(' ', '-', $reportTitle) . '_' . Carbon::now()->format('Y-m-d') . '.pdf';
-
-            try {
-                // Use simpler mPDF configuration without complex font features
-                $mpdf = new Mpdf([
-                    'mode' => 'utf-8',
-                    'format' => 'A4',
-                    'default_font' => 'freesans', // Use built-in font that supports UTF-8
-                    'margin_top' => 15,
-                    'margin_bottom' => 15,
-                    'margin_left' => 10,
-                    'margin_right' => 10,
-                    'autoScriptToLang' => true,
-                    'autoLangToFont' => true,
-                ]);
-
-                // Set metadata
-                $mpdf->SetTitle($reportTitle);
-                $mpdf->SetAuthor('Your System');
-
-                // Render the view with simpler styling
-                $html = view('dashboard.reports.grn_sales_overview_pdf2', [
-                    'reportData' => $finalReportData,
-                    'reportTitle' => $reportTitle
-                ])->render();
-
-                // Write HTML to PDF
-                $mpdf->WriteHTML($html);
-
-                // Output the PDF
-                return response($mpdf->Output($filename, 'D'), 200, [
-                    'Content-Type' => 'application/pdf',
-                    'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-                ]);
-
-            } catch (\Exception $e) {
-                Log::error("PDF generation failed: " . $e->getMessage());
-                Log::error("Stack trace: " . $e->getTraceAsString());
-                return back()->with('error', 'PDF generation failed: ' . $e->getMessage());
-            }
-        }
-
-        return back()->with('error', 'Invalid export format.');
-
-    } catch (\Exception $e) {
-        Log::error("Download method failed: " . $e->getMessage());
-        return back()->with('error', 'Report generation failed: ' . $e->getMessage());
-    }
-}
-
-   public function downloadSalesReport(Request $request)
-{
-    // Determine which table to query - replicate logic from salesReport
-    $useHistory = $request->filled('start_date') || $request->filled('end_date');
-
-    // Use SalesHistory if date range is provided, otherwise Sale
-    $query = $useHistory
-        ? SalesHistory::query()
-        : Sale::query();
-
-    // Include only processed sales
-    $query->where('Processed', 'Y');
-
-    // Apply all filters from the salesReport method
-    if ($request->filled('supplier_code')) {
-        $query->where('supplier_code', $request->supplier_code);
-    }
-
-    if ($request->filled('item_code')) {
-        $query->where('item_code', $request->item_code);
-    }
-
-    if ($request->filled('customer_short_name')) {
-        $search = $request->customer_short_name;
-        $query->where(function ($q) use ($search) {
-            $q->where('customer_code', 'like', '%' . $search . '%')
-                ->orWhereIn('customer_code', function ($sub) use ($search) {
-                    $sub->select('short_name')
-                        ->from('customers')
-                        ->where('name', 'like', '%' . $search . '%');
-                });
-        });
-    }
-
-    if ($request->filled('customer_code')) {
-        $query->where('customer_code', $request->customer_code);
-    }
-
-    if ($request->filled('bill_no')) {
-        $query->where('bill_no', $request->bill_no);
-    }
-
-    // Date range filter (only applied if provided)
-    if ($request->filled('start_date') && $request->filled('end_date')) {
-        $query->whereBetween('Date', [$request->start_date, $request->end_date]);
-    } elseif ($request->filled('start_date')) {
-        $query->where('Date', '>=', $request->start_date);
-    } elseif ($request->filled('end_date')) {
-        $query->where('Date', '<=', $request->end_date);
-    }
-
-    // Order by sales ID in descending order (highest first) - same as salesReport
-    $query->orderBy('id', 'DESC');
-
-    // Get all processed sales (no grouping by bill number) - same as salesReport
-    $salesData = $query->get();
-    $reportTitle = 'Sales Report';
-
-    // Handle Excel format
-    if ($request->get('format') === 'excel') {
-        return Excel::download(new \App\Exports\BillSummaryExport($salesData), 'sales-report.xlsx');
-    }
-
-    // Handle PDF format
-    if ($request->get('format') === 'pdf') {
-        $filename = str_replace(' ', '-', $reportTitle) . '_' . Carbon::now()->format('Y-m-d') . '.pdf';
-
-        try {
-            $defaultConfig = (new ConfigVariables())->getDefaults();
-            $fontDirs = $defaultConfig['fontDir'];
-            $defaultFontConfig = (new FontVariables())->getDefaults();
-            $fontData = $defaultFontConfig['fontdata'];
-
-            $mpdf = new Mpdf([
-                'fontDir' => array_merge($fontDirs, [public_path('fonts')]),
-                'fontdata' => $fontData + [
-                    'notosanssinhala' => [
-                        'R' => 'NotoSansSinhala-Regular.ttf',
-                        'B' => 'NotoSansSinhala-Bold.ttf',
-                    ]
-                ],
-                'default_font' => 'notosanssinhala',
-                'mode' => 'utf-8',
-                'format' => 'A4-P',
-                'margin_top' => 15,
-                'margin_bottom' => 15,
-                'margin_left' => 10,
-                'margin_right' => 10,
-            ]);
-
-            // Use the same view as salesReport but for PDF
-            $html = view('dashboard.reports.sales_report_pdf', compact('salesData'))->render();
-            $mpdf->WriteHTML($html);
-            return $mpdf->Output($filename, 'D');
-
-        } catch (\Exception $e) {
-            Log::error("PDF generation failed: " . $e->getMessage());
-            return back()->with('error', 'PDF generation failed: ' . $e->getMessage());
-        }
-    }
-    return back()->with('error', 'Invalid export format.');
-}
     public function sendGrnEmail(Request $request)
     {
         $code = $request->input('code');
@@ -1890,77 +1150,7 @@ public function salesReport(Request $request)
 
         return back()->with('success', 'GRN Report has been sent successfully!');
     }
-    public function exportPdf(Request $request)
-    {
-        $code = $request->input('code');
-        $grnEntries = GrnEntry::when($code, fn($q) => $q->where('code', $code))->get();
 
-        $groupedData = [];
-
-        foreach ($grnEntries as $entry) {
-            $sales = Sale::where('code', $entry->code)->get();
-            if ($sales->isEmpty()) {
-                $sales = SalesHistory::where('code', $entry->code)->get();
-            }
-
-            $damageValue = $entry->wasted_weight * $entry->PerKGPrice;
-            $totalSoldPacks = $sales->sum('packs');
-            $totalSoldWeight = $sales->sum('weight');
-
-            $groupedData[$entry->code] = [
-                'purchase_price' => $entry->total_grn,
-                'item_name' => $entry->item_name,
-                'sales' => $sales,
-                'damage' => [
-                    'wasted_packs' => $entry->wasted_packs,
-                    'wasted_weight' => $entry->wasted_weight,
-                    'damage_value' => $damageValue
-                ],
-                'profit' => $entry->total_grn - $sales->sum('total') - $damageValue,
-                'updated_at' => $entry->updated_at,
-                'remaining_packs' => $entry->original_packs - $totalSoldPacks,
-                'remaining_weight' => $entry->original_weight - $totalSoldWeight,
-                'totalOriginalPacks' => $entry->original_packs,
-                'totalOriginalWeight' => $entry->original_weight,
-            ];
-        }
-
-        // --- mPDF Setup for Sinhala ---
-        $fontDirs = (new ConfigVariables())->getDefaults()['fontDir'];
-        $fontData = (new FontVariables())->getDefaults()['fontdata'];
-
-        $mpdf = new Mpdf([
-            'fontDir' => array_merge($fontDirs, [public_path('fonts')]),
-            'fontdata' => $fontData + [
-                'notosanssinhala' => [
-                    'R' => 'NotoSansSinhala-Regular.ttf',
-                    'B' => 'NotoSansSinhala-Bold.ttf',
-                ]
-            ],
-            'default_font' => 'notosanssinhala',
-            'mode' => 'utf-8',
-            'format' => 'A4-P',
-            'margin_top' => 15,
-            'margin_bottom' => 15,
-            'margin_left' => 10,
-            'margin_right' => 10,
-        ]);
-
-        // Load Blade HTML
-        $html = view('dashboard.reports.grn_report_pdf', compact('groupedData'))->render();
-
-        $mpdf->WriteHTML($html);
-        $fileName = 'GRN_Report_' . date('Ymd_His') . '.pdf';
-
-        return response($mpdf->Output($fileName, 'S'), 200)
-            ->header('Content-Type', 'application/pdf')
-            ->header('Content-Disposition', 'attachment; filename="' . $fileName . '"');
-    }
-    public function exportExcel(Request $request)
-    {
-        $code = $request->input('code');
-        return Excel::download(new GrnExport($code), 'GRN_Report_' . date('Ymd_His') . '.xlsx');
-    }
     public function returnsReport()
     {
         $data = IncomeExpenses::select(
@@ -2237,7 +1427,4 @@ public function salesReport(Request $request)
 
         return back()->with('success', 'Report generated and emails sent successfully!');
     }
-
-
-
 }
