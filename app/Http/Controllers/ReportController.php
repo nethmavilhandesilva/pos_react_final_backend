@@ -184,30 +184,24 @@ public function getGrnSalecodereport(Request $request)
     
     public function getGrnSalesOverviewReport()
 {
-    // Fetch all GRN entries
+    // Your existing logic...
     $grnEntries = GrnEntry::all();
-
     $reportData = [];
 
     foreach ($grnEntries->groupBy('code') as $code => $entries) {
-        // --- GRN Totals ---
+        // Your existing calculation logic...
         $totalOriginalPacks = $entries->sum('original_packs');
         $totalOriginalWeight = $entries->sum('original_weight');
 
-        // --- Total sales value ---
         $currentSales = Sale::where('code', $code)->get();
         $historicalSales = SalesHistory::where('code', $code)->get();
         $relatedSales = $currentSales->merge($historicalSales);
         $totalSalesValueForGrn = $relatedSales->sum('total');
 
-        // Sum packs & weight from sales tables
         $soldPacksFromSales = $relatedSales->sum('packs');
         $soldWeightFromSales = $relatedSales->sum('weight');
 
-        // --- Remaining Packs ---
         $remainingPacks = $totalOriginalPacks - $soldPacksFromSales;
-        
-        // --- Remaining Weight ---
         $remainingWeight = $totalOriginalWeight - $soldWeightFromSales;
 
         $reportData[] = [
@@ -227,11 +221,16 @@ public function getGrnSalecodereport(Request $request)
         ];
     }
 
-    // Sort the report data alphabetically by grn_code
     $reportData = collect($reportData)->sortBy('grn_code')->values();
 
-    return view('dashboard.reports.grn_sales_overview_report', [
-        'reportData' => $reportData
+    $companyName = Setting::value('CompanyName') ?? 'Default Company';
+    $settingDate = Setting::value('value');
+    $formattedDate = $settingDate ? Carbon::parse($settingDate)->format('Y-m-d') : Carbon::now()->format('Y-m-d');
+
+    return response()->json([
+        'reportData' => $reportData,
+        'companyName' => $companyName,
+        'settingDate' => $formattedDate
     ]);
 }
 
