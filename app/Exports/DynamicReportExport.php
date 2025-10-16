@@ -2,55 +2,47 @@
 
 namespace App\Exports;
 
-use Illuminate\Support\Collection;
-use Maatwebsite\Excel\Concerns\FromCollection;
+use Maatwebsite\Excel\Concerns\FromArray;
 use Maatwebsite\Excel\Concerns\WithHeadings;
+use Maatwebsite\Excel\Concerns\WithTitle;
+use Maatwebsite\Excel\Concerns\WithStyles;
+use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
-class DynamicReportExport implements FromCollection, WithHeadings
+class DynamicReportExport implements FromArray, WithHeadings, WithTitle, WithStyles
 {
-    protected Collection $data;
-    protected array $headings;
-    protected array $meta;
+    protected $reportData;
+    protected $headings;
+    protected $reportTitle;
+    protected $meta;
 
-    /**
-     * @param Collection $data The report data, including totals row if added
-     * @param array $headings Column headings
-     * @param array $meta Optional metadata to display at the top of the Excel
-     */
-    public function __construct(Collection $data, array $headings, array $meta = [])
+    public function __construct($reportData, $headings, $reportTitle, $meta)
     {
-        $this->data = $data;
+        $this->reportData = $reportData;
         $this->headings = $headings;
+        $this->reportTitle = $reportTitle;
         $this->meta = $meta;
     }
 
-    /**
-     * Prepend metadata rows to the data collection
-     */
-    public function collection(): Collection
+    public function array(): array
     {
-        $metaRows = collect();
-
-        if (!empty($this->meta)) {
-            foreach ($this->meta as $label => $value) {
-                if ($value) {
-                    // Put label in first column, value in second, leave rest empty
-                    $metaRows->push(array_merge([$label, $value], array_fill(0, count($this->headings) - 2, '')));
-                }
-            }
-            // Add an empty row after metadata for spacing
-            $metaRows->push(array_fill(0, count($this->headings), ''));
-        }
-
-        // Combine metadata rows with main data
-        return $metaRows->concat($this->data);
+        return $this->reportData;
     }
 
-    /**
-     * Return the headings
-     */
     public function headings(): array
     {
         return $this->headings;
+    }
+
+    public function title(): string
+    {
+        return substr($this->reportTitle, 0, 31); // Excel sheet title max 31 chars
+    }
+
+    public function styles(Worksheet $sheet)
+    {
+        return [
+            // Style the first row as bold text
+            1 => ['font' => ['bold' => true]],
+        ];
     }
 }

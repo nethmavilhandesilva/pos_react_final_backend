@@ -52,3 +52,8 @@ Route::get('/customers', [ReportController::class, 'getCustomers']);
 Route::get('/bill-numbers', [ReportController::class, 'getBillNumbers']);
 Route::get('/company-info', [ReportController::class, 'getCompanyInfo']);
 Route::get('/sales-report', [ReportController::class, 'salesReport']);
+Route::prefix('reports')->group(function () {
+    Route::post('/generate', [ReportController::class, 'generateReport']);
+    Route::post('/download-pdf', [ReportController::class, 'downloadPDF']);
+    Route::post('/download-excel', [ReportController::class, 'downloadExcel']);
+});
