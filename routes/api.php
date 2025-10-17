@@ -61,3 +61,5 @@ Route::prefix('reports')->group(function () {
 //LOGIN ROUTES
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
+//Loan Report
+Route::get('/customers-loans/report', [ReportController::class, 'loanReport']);

@@ -358,6 +358,82 @@ class ReportController extends Controller
             'filters' => $request->all(),
         ]);
     }
+    public function loanReport()
+    {
+        $allLoans = CustomersLoan::all();
+        $groupedLoans = $allLoans->groupBy('customer_short_name');
+
+        // Get all customers with Non realized status from IncomeExpenses
+        $nonRealizedCustomers = IncomeExpenses::where('status', 'Non realized')
+            ->where('settling_way', 'Cheque')
+            ->pluck('customer_short_name')
+            ->toArray();
+
+        $finalLoans = [];
+
+        foreach ($groupedLoans as $customerShortName => $loans) {
+            $lastOldLoan = $loans->where('loan_type', 'old')->sortByDesc('created_at')->first();
+            $firstTodayAfterOld = $loans->where('loan_type', 'today')
+                ->where('created_at', '>', $lastOldLoan->created_at ?? '1970-01-01')
+                ->sortBy('created_at')
+                ->first();
+
+            $highlightColor = null;
+
+            if ($lastOldLoan && $firstTodayAfterOld) {
+                $daysBetweenLoans = Carbon::parse($lastOldLoan->created_at)
+                    ->diffInDays(Carbon::parse($firstTodayAfterOld->created_at));
+
+                if ($daysBetweenLoans > 30) {
+                    $highlightColor = 'red-highlight';
+                } elseif ($daysBetweenLoans >= 14 && $daysBetweenLoans <= 30) {
+                    $highlightColor = 'blue-highlight';
+                }
+
+                $extraTodayLoanExists = $loans->where('loan_type', 'today')
+                    ->where('created_at', '>', $firstTodayAfterOld->created_at)
+                    ->count() > 0;
+
+                if ($extraTodayLoanExists) {
+                    $highlightColor = null;
+                }
+            } elseif ($lastOldLoan && !$firstTodayAfterOld) {
+                $daysSinceLastOldLoan = Carbon::parse($lastOldLoan->created_at)
+                    ->diffInDays(Carbon::now());
+
+                if ($daysSinceLastOldLoan > 30) {
+                    $highlightColor = 'red-highlight';
+                } elseif ($daysSinceLastOldLoan >= 14 && $daysSinceLastOldLoan <= 30) {
+                    $highlightColor = 'blue-highlight';
+                }
+            }
+
+            $totalToday = $loans->where('loan_type', 'today')->sum('amount');
+            $totalOld = $loans->where('loan_type', 'old')->sum('amount');
+            $totalAmount = $totalToday - $totalOld;
+
+            // If this customer has Non realized cheques → force orange highlight
+            if (in_array($customerShortName, $nonRealizedCustomers)) {
+                $highlightColor = 'orange-highlight';
+            }
+
+            $finalLoans[] = [
+                'customer_short_name' => $customerShortName,
+                'total_amount' => $totalAmount,
+                'highlight_color' => $highlightColor,
+            ];
+        }
+
+        // Get company settings
+        $companyName = Setting::value('CompanyName') ?? 'Default Company';
+        $settingDate = Setting::value('value') ?? now()->format('Y-m-d');
+
+        return response()->json([
+            'loans' => $finalLoans,
+            'companyName' => $companyName,
+            'settingDate' => $settingDate
+        ]);
+    }
 
     public function financialReport()
     {
