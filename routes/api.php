@@ -48,8 +48,8 @@ Route::post('/report/sale-code', [ReportController::class, 'getGrnSalecodereport
 Route::post('/reports/salesadjustment/filter', [ReportController::class, 'salesAdjustmentReport']);
 Route::get('/reports/grn-sales-overview', [ReportController::class, 'getGrnSalesOverviewReport']);
 Route::get('/reports/grn-sales-overview2', [ReportController::class, 'getGrnSalesOverviewReport2']);
-Route::get('/suppliers', [ReportController::class, 'getSuppliers']);
-Route::get('/customers', [ReportController::class, 'getCustomers']);
+Route::get('/suppliersall', [ReportController::class, 'getSuppliers']);
+Route::get('/customersall', [ReportController::class, 'getCustomers']);
 Route::get('/bill-numbers', [ReportController::class, 'getBillNumbers']);
 Route::get('/company-info', [ReportController::class, 'getCompanyInfo']);
 Route::get('/sales-report', [ReportController::class, 'salesReport']);
@@ -58,5 +58,6 @@ Route::prefix('reports')->group(function () {
     Route::post('/download-pdf', [ReportController::class, 'downloadPDF']);
     Route::post('/download-excel', [ReportController::class, 'downloadExcel']);
 });
+//LOGIN ROUTES
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
