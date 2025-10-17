@@ -434,7 +434,115 @@ class ReportController extends Controller
             'settingDate' => $settingDate
         ]);
     }
+public function fetchGrnCodes()
+{
+    $codes = GrnEntry::pluck('code')->unique()->values();
+    
+    return response()->json([
+        'codes' => $codes
+    ]);
+}
 
+public function grnReport2(Request $request)
+{
+    $code = $request->input('code');
+
+    $grnQuery = GrnEntry::query();
+    if ($code) {
+        $grnQuery->where('code', $code);
+    }
+    $grnEntries = $grnQuery->get();
+
+    $groupedData = [];
+
+    foreach ($grnEntries as $entry) {
+        // --- Current + Historical Sales ---
+        $currentSales = Sale::where('code', $entry->code)->get([
+            'code',
+            'customer_code',
+            'item_code',
+            'supplier_code',
+            'weight',
+            'price_per_kg',
+            'total',
+            'packs',
+            'item_name',
+            'Date',
+            'bill_no',
+        ])->map(function ($sale) {
+            $sale->type = 'Sales';
+            return $sale;
+        });
+
+        $historicalSales = SalesHistory::where('code', $entry->code)->get([
+            'code',
+            'customer_code',
+            'item_code',
+            'supplier_code',
+            'weight',
+            'price_per_kg',
+            'total',
+            'packs',
+            'item_name',
+            'Date',
+            'bill_no',
+        ])->map(function ($sale) {
+            $sale->type = 'Sales';
+            return $sale;
+        });
+
+        $sales = $currentSales->concat($historicalSales);
+
+        // --- GRN Transactions ---
+        $grnTransactions = GrnEntry2::where('code', $entry->code)->get()->map(function ($txn) {
+            return (object) [
+                'Date' => $txn->txn_date,
+                'type' => 'GRN',
+                'bill_no' => '-',
+                'customer_code' => '-',
+                'weight' => $txn->weight,
+                'price_per_kg' => '-',
+                'packs' => $txn->packs,
+                'total' => '-',
+            ];
+        });
+
+        // --- Merge and mix Sales + GRN by date ---
+        $allRows = $sales->concat($grnTransactions)
+            ->map(function ($row) {
+                $row->sort_date = $row->Date ?? now();
+                return $row;
+            })
+            ->sortByDesc('sort_date')
+            ->values();
+
+        // --- Totals ---
+        $totalSales = $sales->sum('total');
+        $damageValue = $entry->wasted_weight * $entry->PerKGPrice;
+
+        $groupedData[$entry->code] = [
+            'purchase_price' => $entry->total_grn,
+            'item_name' => $entry->item_name,
+            'all_rows' => $allRows,
+            'damage' => [
+                'wasted_packs' => $entry->wasted_packs,
+                'wasted_weight' => $entry->wasted_weight,
+                'damage_value' => $damageValue,
+            ],
+            'profit' => $entry->total_grn - $totalSales - $damageValue,
+            'updated_at' => $entry->updated_at,
+            'remaining_packs' => $entry->packs,
+            'remaining_weight' => $entry->weight,
+            'totalOriginalPacks' => $entry->original_packs,
+            'totalOriginalWeight' => $entry->original_weight,
+        ];
+    }
+
+    return response()->json([
+        'groupedData' => $groupedData,
+        'selectedCode' => $code,
+    ]);
+}
     public function financialReport()
     {
         // Fetch today's Income/Expenses records

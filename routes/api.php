@@ -63,3 +63,6 @@ Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 //Loan Report
 Route::get('/customers-loans/report', [ReportController::class, 'loanReport']);
+//rn report
+Route::get('/grn-codes', [ReportController::class, 'fetchGrnCodes']);
+Route::get('/grn-report', [ReportController::class, 'grnReport2']);
