@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Controller;
 use App\Models\Customer;
 use Illuminate\Http\Request;
+use Illuminate\Http\JsonResponse;
 
 class CustomerController extends Controller
 {
@@ -14,6 +15,11 @@ public function apiIndex()
 {
     return response()->json(Customer::all());
 }
+public function index(): JsonResponse
+    {
+        $customers = Customer::all();
+        return response()->json(['customers' => $customers]);
+    }
 
 public function apiStore(Request $request)
 {

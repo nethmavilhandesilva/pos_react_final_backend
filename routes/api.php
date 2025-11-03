@@ -8,6 +8,7 @@ use App\Http\Controllers\GrnEntryController;
 use App\Http\Controllers\CustomersLoanController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\SalesEntryController;
 
 //CUSTOMERS
 Route::get('/customers', [CustomerController::class, 'apiIndex']);
@@ -20,13 +21,22 @@ Route::get('items/search/{query}', [ItemController::class, 'search']);
 // API Routes for Suppliers
 Route::apiResource('suppliers', SupplierController::class);
 Route::get('suppliers/search/{query}', [SupplierController::class, 'search']);
+
 // GRN Entry API Routes
-Route::get('/grn-entries', [GrnEntryController::class, 'index']);
+// --- FIX: Specific routes MUST come before wildcard routes ---
+Route::get('/grn-entries/latest', [GrnEntryController::class, 'getLatestEntries']); // <-- MOVED UP
 Route::get('/grn-entries/create-data', [GrnEntryController::class, 'createData']);
+Route::get('/grn-entries/code/{code}', [GrnEntryController::class, 'getByCode']);
+
+// --- Generic and wildcard routes go last ---
+Route::get('/grn-entries', [GrnEntryController::class, 'index']);
 Route::post('/grn-entries', [GrnEntryController::class, 'store']);
-Route::get('/grn-entries/{id}', [GrnEntryController::class, 'show']);
+Route::get('/grn-entries/{id}', [GrnEntryController::class, 'show']); // <-- This was catching 'latest'
 Route::put('/grn-entries/{id}', [GrnEntryController::class, 'update']);
 Route::delete('/grn-entries/{id}', [GrnEntryController::class, 'destroy']);
+// --- END FIX ---
+
+
 // Customers Loan API Routes
 Route::get('/customers-loans', [CustomersLoanController::class, 'index']);
 Route::post('/customers-loans', [CustomersLoanController::class, 'store']);
@@ -38,7 +48,7 @@ Route::get('/not-changing-grns', [GrnEntryController::class, 'getNotChangingGRNs
 Route::get('/grn/balance/{code}', [GrnEntryController::class, 'getGrnBalance']);
 Route::post('/grn/store2', [GrnEntryController::class, 'store2']);
 Route::delete('/grn/delete/update/{id}', [GrnEntryController::class, 'destroyupdate']);
-Route::get('/grn-entries/code/{code}', [GrnEntryController::class, 'getByCode']);
+
 //Reports
 Route::get('/allitems', [ReportController::class, 'fetchItems']);
 Route::get('/item-report', [ReportController::class, 'itemReport']);
@@ -66,3 +76,16 @@ Route::get('/customers-loans/report', [ReportController::class, 'loanReport']);
 //rn report
 Route::get('/grn-codes', [ReportController::class, 'fetchGrnCodes']);
 Route::get('/grn-report', [ReportController::class, 'grnReport2']);
+
+// Sales routes
+Route::get('/sales', [SalesEntryController::class, 'index']);
+Route::post('/sales', [SalesEntryController::class, 'store']);
+Route::put('/sales/{sale}', [SalesEntryController::class, 'update']);
+Route::delete('/sales/{sale}', [SalesEntryController::class, 'destroy']);
+Route::post('/sales/mark-printed', [SalesEntryController::class, 'markAsPrinted']);
+Route::post('/sales/mark-all-processed', [SalesEntryController::class, 'markAllAsProcessed']);
+Route::put('/sales/{sale}/given-amount', [SalesEntryController::class, 'updateGivenAmount']);
+
+// Customer routes
+Route::post('/get-loan-amount', [SalesEntryController::class, 'getLoanAmount']);
+

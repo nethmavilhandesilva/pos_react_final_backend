@@ -331,4 +331,56 @@ class GrnEntryController extends Controller
     $entries = GrnEntry2::where('code', $code)->get();
     return response()->json($entries);
 }
+    public function getLatestEntries(Request $request)
+    {
+        // <-- ADD THIS LOG
+        Log::info('--- getLatestEntries: Function was called. ---');
+
+        try {
+            // Get all GRN entries with latest data, ordered by date
+            $entries = GrnEntry::where('is_hidden', 0)
+                ->orderBy('txn_date', 'desc')
+                ->get()
+                ->map(function ($entry) {
+                    return [
+                        'code' => $entry->code,
+                        'item_name' => $entry->item_name,
+                        'supplier_code' => $entry->supplier_code,
+                        'item_code' => $entry->item_code,
+                        'price_per_kg' => $entry->price_per_kg,
+                        'PerKGPrice' => $entry->PerKGPrice,
+                        'SalesKGPrice' => $entry->SalesKGPrice,
+                        'weight' => $entry->weight, // Real-time weight
+                        'packs' => $entry->packs,   // Real-time packs
+                        'original_weight' => $entry->original_weight,
+                        'original_packs' => $entry->original_packs,
+                    ];
+                });
+
+            // <-- ADD THIS LOG
+            Log::info('getLatestEntries: Query successful. Found ' . $entries->count() . ' entries.');
+
+            return response()->json([
+                'success' => true,
+                'entries' => $entries
+            ]);
+
+        } catch (\Exception $e) {
+            
+            // <-- THIS IS THE MOST IMPORTANT LOG -->
+            // It will write the full error and stack trace to your log file.
+            Log::error('getLatestEntries: FAILED TO FETCH GRN ENTRIES', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString() // Full stack trace
+            ]);
+            // <-- END OF LOG -->
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch GRN entries: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 }
