@@ -10,82 +10,92 @@ use App\Http\Controllers\ReportController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\SalesEntryController;
 
-//CUSTOMERS
-Route::get('/customers', [CustomerController::class, 'apiIndex']);
-Route::post('/customers', [CustomerController::class, 'apiStore']);
-Route::put('/customers/{customer}', [CustomerController::class, 'apiUpdate']);
-Route::delete('/customers/{customer}', [CustomerController::class, 'apiDestroy']);
-//ITEMS
-Route::apiResource('items', ItemController::class);
-Route::get('items/search/{query}', [ItemController::class, 'search']);
-// API Routes for Suppliers
-Route::apiResource('suppliers', SupplierController::class);
-Route::get('suppliers/search/{query}', [SupplierController::class, 'search']);
+// ----------------------------------------------------------------------
+// 🚨 PUBLIC ROUTES (No Authentication Required) 🚨
+// ----------------------------------------------------------------------
 
-// GRN Entry API Routes
-// --- FIX: Specific routes MUST come before wildcard routes ---
-Route::get('/grn-entries/latest', [GrnEntryController::class, 'getLatestEntries']); // <-- MOVED UP
-Route::get('/grn-entries/create-data', [GrnEntryController::class, 'createData']);
-Route::get('/grn-entries/code/{code}', [GrnEntryController::class, 'getByCode']);
-
-// --- Generic and wildcard routes go last ---
-Route::get('/grn-entries', [GrnEntryController::class, 'index']);
-Route::post('/grn-entries', [GrnEntryController::class, 'store']);
-Route::get('/grn-entries/{id}', [GrnEntryController::class, 'show']); // <-- This was catching 'latest'
-Route::put('/grn-entries/{id}', [GrnEntryController::class, 'update']);
-Route::delete('/grn-entries/{id}', [GrnEntryController::class, 'destroy']);
-// --- END FIX ---
-
-
-// Customers Loan API Routes
-Route::get('/customers-loans', [CustomersLoanController::class, 'index']);
-Route::post('/customers-loans', [CustomersLoanController::class, 'store']);
-Route::get('/customers-loans/{customerId}/total', [CustomersLoanController::class, 'getCustomerLoanTotal']);
-Route::put('/customers-loans/{id}', [CustomersLoanController::class, 'update']);
-Route::delete('/customers-loans/{id}', [CustomersLoanController::class, 'destroy']);
-//GRN UPDATE API Routes
-Route::get('/not-changing-grns', [GrnEntryController::class, 'getNotChangingGRNs']);
-Route::get('/grn/balance/{code}', [GrnEntryController::class, 'getGrnBalance']);
-Route::post('/grn/store2', [GrnEntryController::class, 'store2']);
-Route::delete('/grn/delete/update/{id}', [GrnEntryController::class, 'destroyupdate']);
-
-//Reports
-Route::get('/allitems', [ReportController::class, 'fetchItems']);
-Route::get('/item-report', [ReportController::class, 'itemReport']);
-Route::post('/report/weight', [ReportController::class, 'getweight']);
-Route::get('/grncodes', [ReportController::class, 'getGrnEntries']);
-Route::post('/report/sale-code', [ReportController::class, 'getGrnSalecodereport']);
-Route::post('/reports/salesadjustment/filter', [ReportController::class, 'salesAdjustmentReport']);
-Route::get('/reports/grn-sales-overview', [ReportController::class, 'getGrnSalesOverviewReport']);
-Route::get('/reports/grn-sales-overview2', [ReportController::class, 'getGrnSalesOverviewReport2']);
-Route::get('/suppliersall', [ReportController::class, 'getSuppliers']);
-Route::get('/customersall', [ReportController::class, 'getCustomers']);
-Route::get('/bill-numbers', [ReportController::class, 'getBillNumbers']);
-Route::get('/company-info', [ReportController::class, 'getCompanyInfo']);
-Route::get('/sales-report', [ReportController::class, 'salesReport']);
-Route::prefix('reports')->group(function () {
-    Route::post('/generate', [ReportController::class, 'generateReport']);
-    Route::post('/download-pdf', [ReportController::class, 'downloadPDF']);
-    Route::post('/download-excel', [ReportController::class, 'downloadExcel']);
-});
-//LOGIN ROUTES
+// LOGIN ROUTES
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
-//Loan Report
-Route::get('/customers-loans/report', [ReportController::class, 'loanReport']);
-//rn report
-Route::get('/grn-codes', [ReportController::class, 'fetchGrnCodes']);
-Route::get('/grn-report', [ReportController::class, 'grnReport2']);
 
-// Sales routes
-Route::get('/sales', [SalesEntryController::class, 'index']);
-Route::post('/sales', [SalesEntryController::class, 'store']);
-Route::put('/sales/{sale}', [SalesEntryController::class, 'update']);
-Route::delete('/sales/{sale}', [SalesEntryController::class, 'destroy']);
-Route::post('/sales/mark-printed', [SalesEntryController::class, 'markAsPrinted']);
-Route::post('/sales/mark-all-processed', [SalesEntryController::class, 'markAllAsProcessed']);
-Route::put('/sales/{sale}/given-amount', [SalesEntryController::class, 'updateGivenAmount']);
+// ----------------------------------------------------------------------
+// ✅ PROTECTED ROUTES (Requires 'auth:sanctum' middleware) ✅
+// ----------------------------------------------------------------------
+Route::middleware('auth:sanctum')->group(function () {
 
-// Customer routes
-Route::post('/get-loan-amount', [SalesEntryController::class, 'getLoanAmount']);
+    // CUSTOMERS
+    Route::get('/customers', [CustomerController::class, 'apiIndex']);
+    Route::post('/customers', [CustomerController::class, 'apiStore']);
+    Route::put('/customers/{customer}', [CustomerController::class, 'apiUpdate']);
+    Route::delete('/customers/{customer}', [CustomerController::class, 'apiDestroy']);
 
+    // ITEMS
+    Route::apiResource('items', ItemController::class);
+    Route::get('items/search/{query}', [ItemController::class, 'search']);
+
+    // API Routes for Suppliers
+    Route::apiResource('suppliers', SupplierController::class);
+    Route::get('suppliers/search/{query}', [SupplierController::class, 'search']);
+
+    // GRN Entry API Routes
+    // --- FIX: Specific routes MUST come before wildcard routes ---
+    Route::get('/grn-entries/latest', [GrnEntryController::class, 'getLatestEntries']);
+    Route::get('/grn-entries/create-data', [GrnEntryController::class, 'createData']);
+    Route::get('/grn-entries/code/{code}', [GrnEntryController::class, 'getByCode']);
+
+    // --- Generic and wildcard routes go last ---
+    // NOTE: I replaced the redundant manual routes with a single apiResource call
+    Route::apiResource('grn-entries', GrnEntryController::class);
+
+
+    // Customers Loan API Routes
+    Route::get('/customers-loans', [CustomersLoanController::class, 'index']);
+    Route::post('/customers-loans', [CustomersLoanController::class, 'store']);
+    Route::get('/customers-loans/{customerId}/total', [CustomersLoanController::class, 'getCustomerLoanTotal']);
+    Route::put('/customers-loans/{id}', [CustomersLoanController::class, 'update']);
+    Route::delete('/customers-loans/{id}', [CustomersLoanController::class, 'destroy']);
+
+    // GRN UPDATE API Routes
+    Route::get('/not-changing-grns', [GrnEntryController::class, 'getNotChangingGRNs']);
+    Route::get('/grn/balance/{code}', [GrnEntryController::class, 'getGrnBalance']);
+    Route::post('/grn/store2', [GrnEntryController::class, 'store2']);
+    Route::delete('/grn/delete/update/{id}', [GrnEntryController::class, 'destroyupdate']);
+
+    // Reports
+    Route::get('/allitems', [ReportController::class, 'fetchItems']);
+    Route::get('/item-report', [ReportController::class, 'itemReport']);
+    Route::post('/report/weight', [ReportController::class, 'getweight']);
+    Route::get('/grncodes', [ReportController::class, 'getGrnEntries']);
+    Route::post('/report/sale-code', [ReportController::class, 'getGrnSalecodereport']);
+    Route::post('/reports/salesadjustment/filter', [ReportController::class, 'salesAdjustmentReport']);
+    Route::get('/reports/grn-sales-overview', [ReportController::class, 'getGrnSalesOverviewReport']);
+    Route::get('/reports/grn-sales-overview2', [ReportController::class, 'getGrnSalesOverviewReport2']);
+    Route::get('/suppliersall', [ReportController::class, 'getSuppliers']);
+    Route::get('/customersall', [ReportController::class, 'getCustomers']);
+    Route::get('/bill-numbers', [ReportController::class, 'getBillNumbers']);
+    Route::get('/company-info', [ReportController::class, 'getCompanyInfo']);
+    Route::get('/sales-report', [ReportController::class, 'salesReport']);
+    Route::prefix('reports')->group(function () {
+        Route::post('/generate', [ReportController::class, 'generateReport']);
+        Route::post('/download-pdf', [ReportController::class, 'downloadPDF']);
+        Route::post('/download-excel', [ReportController::class, 'downloadExcel']);
+    });
+
+    // Loan Report
+    Route::get('/customers-loans/report', [ReportController::class, 'loanReport']);
+    // GRN report
+    Route::get('/grn-codes', [ReportController::class, 'fetchGrnCodes']);
+    Route::get('/grn-report', [ReportController::class, 'grnReport2']);
+
+    // Sales routes (THIS IS THE CONTROLLER WHERE YOU GOT THE ERROR)
+    Route::get('/sales', [SalesEntryController::class, 'index']);
+    Route::post('/sales', [SalesEntryController::class, 'store']); // <-- NOW PROTECTED
+    Route::put('/sales/{sale}', [SalesEntryController::class, 'update']);
+    Route::delete('/sales/{sale}', [SalesEntryController::class, 'destroy']);
+    Route::post('/sales/mark-printed', [SalesEntryController::class, 'markAsPrinted']);
+    Route::post('/sales/mark-all-processed', [SalesEntryController::class, 'markAllAsProcessed']);
+    Route::put('/sales/{sale}/given-amount', [SalesEntryController::class, 'updateGivenAmount']);
+
+    // Customer routes
+    Route::post('/get-loan-amount', [SalesEntryController::class, 'getLoanAmount']);
+});

@@ -39,28 +39,34 @@ class AuthController extends Controller
 
     // Login by user_id + password
     public function login(Request $request)
-    {
-        $request->validate([
-            'user_id'  => 'required|string',
-            'password' => 'required|string',
-        ]);
+{
+    $request->validate([
+        'user_id'  => 'required|string',
+        'password' => 'required|string',
+    ]);
 
-        $user = User::where('user_id', $request->user_id)->first();
+    $user = User::where('user_id', $request->user_id)->first();
 
-        if (!$user || !Hash::check($request->password, $user->password)) {
-            throw ValidationException::withMessages([
-                'user_id' => ['The provided credentials are incorrect.']
-            ]);
-        }
-
-        // Optionally update last login time or IP
-        $user->update(['ip_address' => $request->ip()]);
-
-        $user->makeHidden(['password']);
-
-        return response()->json([
-            'message' => 'Login successful',
-            'user'    => $user
+    if (!$user || !Hash::check($request->password, $user->password)) {
+        throw ValidationException::withMessages([
+            'user_id' => ['The provided credentials are incorrect.']
         ]);
     }
+
+    // Update IP or login info
+    $user->update(['ip_address' => $request->ip()]);
+
+    // Create Sanctum Token
+    $token = $user->createToken('auth_token')->plainTextToken;
+
+    // Hide password
+    $user->makeHidden(['password']);
+
+    return response()->json([
+        'message' => 'Login successful',
+        'token'   => $token,
+        'user'    => $user
+    ]);
+}
+
 }
