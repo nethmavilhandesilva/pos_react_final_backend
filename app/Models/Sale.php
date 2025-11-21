@@ -38,6 +38,7 @@ class Sale extends Model
         'Date',
         'ip_address',
         'given_amount',
+        'commission_amount'
 
     ];
 
