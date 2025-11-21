@@ -1,4 +1,5 @@
 <?php
+
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\CustomerController;
@@ -9,6 +10,7 @@ use App\Http\Controllers\CustomersLoanController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\SalesEntryController;
+use App\Http\Controllers\CommissionController; // <-- Commission Controller is imported
 
 // ----------------------------------------------------------------------
 // 🚨 PUBLIC ROUTES (No Authentication Required) 🚨
@@ -18,12 +20,19 @@ use App\Http\Controllers\SalesEntryController;
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 
+// 💰 COMMISSIONS: PUBLIC ITEM OPTIONS 💰
+// This is the CRITICAL FIX: Item options are needed for the dropdown 
+// and must be outside the 'auth:sanctum' middleware.
+Route::get('/items/options', [CommissionController::class, 'getItemOptions']);
+
+
 // ----------------------------------------------------------------------
 // ✅ PROTECTED ROUTES (Requires 'auth:sanctum' middleware) ✅
 // ----------------------------------------------------------------------
 Route::middleware('auth:sanctum')->group(function () {
 
-    // CUSTOMERS
+    // CUSTOMERS (Using apiResource for better structure/consistency)
+    // Note: I recommend replacing the manual routes below with a single Route::apiResource('customers', CustomerController::class);
     Route::get('/customers', [CustomerController::class, 'apiIndex']);
     Route::post('/customers', [CustomerController::class, 'apiStore']);
     Route::put('/customers/{customer}', [CustomerController::class, 'apiUpdate']);
@@ -42,9 +51,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/grn-entries/latest', [GrnEntryController::class, 'getLatestEntries']);
     Route::get('/grn-entries/create-data', [GrnEntryController::class, 'createData']);
     Route::get('/grn-entries/code/{code}', [GrnEntryController::class, 'getByCode']);
-
     // --- Generic and wildcard routes go last ---
-    // NOTE: I replaced the redundant manual routes with a single apiResource call
     Route::apiResource('grn-entries', GrnEntryController::class);
 
 
@@ -87,9 +94,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/grn-codes', [ReportController::class, 'fetchGrnCodes']);
     Route::get('/grn-report', [ReportController::class, 'grnReport2']);
 
-    // Sales routes (THIS IS THE CONTROLLER WHERE YOU GOT THE ERROR)
+    // Sales routes
     Route::get('/sales', [SalesEntryController::class, 'index']);
-    Route::post('/sales', [SalesEntryController::class, 'store']); // <-- NOW PROTECTED
+    Route::post('/sales', [SalesEntryController::class, 'store']);
     Route::put('/sales/{sale}', [SalesEntryController::class, 'update']);
     Route::delete('/sales/{sale}', [SalesEntryController::class, 'destroy']);
     Route::post('/sales/mark-printed', [SalesEntryController::class, 'markAsPrinted']);
@@ -98,4 +105,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Customer routes
     Route::post('/get-loan-amount', [SalesEntryController::class, 'getLoanAmount']);
+    
+    // 💰 COMMISSIONS: PROTECTED CRUD 💰
+    // Use a resource route for the main CRUD operations (List, Create, Show, Update, Delete)
+    Route::resource('commissions', CommissionController::class)->except(['create', 'edit']);
+
 });
