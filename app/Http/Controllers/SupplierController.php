@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\Supplier;
 use Illuminate\Http\Request;
+use App\Models\Sale;
+use Illuminate\Support\Facades\DB;
 
 class SupplierController extends Controller
 {
@@ -71,4 +73,49 @@ class SupplierController extends Controller
         
         return response()->json($suppliers);
     }
+    public function getSupplierBillStatusSummary()
+    {
+        // Get distinct supplier_codes where 'bill_printed' is 'Y'
+        $printedSuppliers = Sale::select('supplier_code')
+            ->where('bill_printed', 'Y')
+            ->distinct()
+            ->pluck('supplier_code')
+            ->all();
+
+        // Get distinct supplier_codes where 'bill_printed' is 'N'
+        $unprintedSuppliers = Sale::select('supplier_code')
+            ->where('bill_printed', 'N')
+            ->distinct()
+            ->pluck('supplier_code')
+            ->all();
+
+        return response()->json([
+            'printed' => $printedSuppliers,
+            'unprinted' => $unprintedSuppliers,
+        ]);
+    }
+
+    /**
+     * Get detailed sales records for a specific supplier code.
+     */
+  public function getSupplierDetails($supplierCode)
+{
+    $details = Sale::select(
+        'supplier_code',
+        'customer_code',
+        'item_name',
+        'weight',
+        'price_per_kg',
+        'commission_amount',
+        'total',
+        'packs',
+        'bill_no',
+        DB::raw('DATE(created_at) as Date')
+    )
+    ->where('supplier_code', $supplierCode)
+    ->get();
+
+    return response()->json($details);
+}
+
 }
