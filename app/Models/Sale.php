@@ -38,7 +38,16 @@ class Sale extends Model
         'Date',
         'ip_address',
         'given_amount',
-        'commission_amount'
+        'commission_amount',
+        'CustomerPackCost',
+        'CustomerPackLabour',
+        'SupplierWeight',
+        'SupplierPricePerKg',
+        'SupplierTotal',
+        'SupplierPackCost',
+        'SupplierPackLabour',
+
+
 
     ];
 
