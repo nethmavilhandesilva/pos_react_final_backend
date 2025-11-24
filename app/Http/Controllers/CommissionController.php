@@ -24,12 +24,23 @@ class CommissionController extends Controller
     public function store(Request $request)
     {
         $validatedData = $request->validate([
-            'item_code' => 'required|string|max:255',
-            'item_name' => 'required|string|max:255',
-            'starting_price' => 'required|numeric|min:0',
-            'end_price' => 'required|numeric|gte:starting_price',
-            'commission_amount' => 'required|numeric|min:0', 
+            'item_code' => 'nullable|string|max:255',
+            'item_name' => 'nullable|string|max:255',
+            'supplier_code' => 'nullable|string|max:255',
+            'supplier_name' => 'nullable|string|max:255',
+            'starting_price' => 'nullable|numeric|min:0',
+            'end_price' => 'nullable|numeric|gte:starting_price',
+            'commission_amount' => 'nullable|numeric|min:0',
         ]);
+
+        // Determine the type
+        if (!empty($validatedData['item_code'])) {
+            $validatedData['type'] = 'T';
+        } elseif (!empty($validatedData['supplier_code'])) {
+            $validatedData['type'] = 'S';
+        } else {
+            $validatedData['type'] = 'Z';
+        }
 
         $commission = Commission::create($validatedData);
 
@@ -38,7 +49,7 @@ class CommissionController extends Controller
             'commission' => $commission
         ], 201);
     }
-    
+
     // --- API to get a single commission for editing ---
     public function show(Commission $commission)
     {
@@ -49,13 +60,23 @@ class CommissionController extends Controller
     public function update(Request $request, Commission $commission)
     {
         $validatedData = $request->validate([
-            // item_code and item_name are typically not changed during an update, but we keep them for integrity
-            'item_code' => 'required|string|max:255',
-            'item_name' => 'required|string|max:255', 
+            'item_code' => 'nullable|string|max:255',
+            'item_name' => 'nullable|string|max:255',
+            'supplier_code' => 'nullable|string|max:255',
+            'supplier_name' => 'nullable|string|max:255',
             'starting_price' => 'required|numeric|min:0',
             'end_price' => 'required|numeric|gte:starting_price',
-            'commission_amount' => 'required|numeric|min:0', 
+            'commission_amount' => 'required|numeric|min:0',
         ]);
+
+        // Determine the type
+        if (!empty($validatedData['item_code'])) {
+            $validatedData['type'] = 'T';
+        } elseif (!empty($validatedData['supplier_code'])) {
+            $validatedData['type'] = 'S';
+        } else {
+            $validatedData['type'] = 'Z';
+        }
 
         $commission->update($validatedData);
 

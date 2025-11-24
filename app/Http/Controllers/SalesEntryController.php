@@ -26,12 +26,12 @@ class SalesEntryController extends Controller
         try {
             // --- FIX ---
             // Removed 'grnEntry' because the relationship does not exist in the Sale.php model
-            $sales = Sale::with(['customer'])->get(); 
+            $sales = Sale::with(['customer'])->get();
             // --- END FIX ---
 
             $printedSales = $sales->where('bill_printed', 'Y')->values();
             $unprintedSales = $sales->where('bill_printed', 'N')->values();
-            
+
             Log::info('SalesEntryController@index: Query successful. Found ' . $sales->count() . ' sales.');
 
             return response()->json([
@@ -152,118 +152,127 @@ class SalesEntryController extends Controller
             'itemsWithPackCost'
         ));
     }
-public function store(Request $request)
-{
-    $validated = $request->validate([
-        'supplier_code' => 'required|string|max:255',
-        'customer_code' => 'required|string|max:255',
-        'customer_name' => 'nullable',
-        'item_code' => 'required|string|exists:items,no',
-        'item_name' => 'required',
-        'weight' => 'required|numeric',
-        'price_per_kg' => 'required|numeric',
-        'pack_due' => 'nullable|numeric',
-        'total' => 'required|numeric',
-        'packs' => 'required|numeric',
-        'given_amount' => 'nullable|numeric',
-        'bill_no' => 'nullable|string|max:255',
-        'bill_printed' => 'nullable|string|in:N,Y',
-    ]);
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'supplier_code' => 'required|string|max:255',
+            'customer_code' => 'required|string|max:255',
+            'customer_name' => 'nullable|string|max:255',
+            'item_code' => 'required|string|exists:items,no',
+            'item_name' => 'required|string|max:255',
+            'weight' => 'required|numeric',
+            'price_per_kg' => 'required|numeric',
+            'pack_due' => 'nullable|numeric',
+            'total' => 'required|numeric',
+            'packs' => 'required|numeric',
+            'given_amount' => 'nullable|numeric',
+            'bill_no' => 'nullable|string|max:255',
+            'bill_printed' => 'nullable|string|in:N,Y',
+        ]);
 
-    try {
-        DB::beginTransaction();
+        try {
+            DB::beginTransaction();
 
-        // --- COMMISSION RULE LOOKUP ---
-        $commissionAmount = 0.00;
-        $pricePerKg = $validated['price_per_kg'];
+            $pricePerKg = $validated['price_per_kg'];
+            $commissionAmount = 0.00;
 
-        $commissionRule = Commission::where('starting_price', '<=', $pricePerKg)
-            ->where('end_price', '>=', $pricePerKg)
-            ->first();
+            // --- 1. Check Commission by Item Code ---
+            $commissionRule = Commission::where('item_code', $validated['item_code'])->first();
 
-        if ($commissionRule) {
-            $commissionAmount = $commissionRule->commission_amount;
-        }
+            // --- 2. Check Commission by Supplier Code ---
+            if (!$commissionRule) {
+                $commissionRule = Commission::where('supplier_code', $validated['supplier_code'])->first();
+            }
 
-        // --- FETCH ITEM PACK COST & PACK LABOUR ---
-        $item = Item::where('no', $validated['item_code'])->first();
+            // --- 3. Check Global Commission Rules (type = 'Z') ---
+            if (!$commissionRule) {
+                $commissionRule = Commission::where('type', 'Z')
+                    ->where('starting_price', '<=', $pricePerKg)
+                    ->where('end_price', '>=', $pricePerKg)
+                    ->first();
+            }
 
-        if (!$item) {
+            if ($commissionRule) {
+                $commissionAmount = $commissionRule->commission_amount;
+            }
+
+            // --- FETCH ITEM PACK COST & PACK LABOUR ---
+            $item = Item::where('no', $validated['item_code'])->first();
+
+            if (!$item) {
+                return response()->json([
+                    'error' => 'Item not found for the given item_code.'
+                ], 422);
+            }
+
+            $customerPackCost = $item->pack_cost ?? 0;
+            $customerPackLabour = $item->pack_due ?? 0;
+
+            // --- OTHER META DATA ---
+            $settingDate = Setting::value('value') ?? now()->toDateString();
+            $loggedInUserId = auth()->user()->user_id;
+            $uniqueCode = $validated['customer_code'] . '-' . $loggedInUserId;
+
+            $billPrintedStatus = $validated['bill_printed'] ?? null;
+            $billNo = $validated['bill_no'] ?? null;
+
+            // --- CREATE SALE RECORD ---
+            $sale = Sale::create([
+                'supplier_code' => $validated['supplier_code'],
+                'customer_code' => strtoupper($validated['customer_code']),
+                'customer_name' => $validated['customer_name'],
+
+                'code' => $validated['item_code'],
+                'item_code' => $validated['item_code'],
+                'item_name' => $validated['item_name'],
+                'weight' => $validated['weight'],
+                'price_per_kg' => $validated['price_per_kg'],
+                'pack_due' => $validated['pack_due'] ?? 0,
+                'total' => $validated['total'],
+                'packs' => $validated['packs'],
+
+                // CUSTOMER FIELDS
+                'CustomerPackCost' => $customerPackCost,
+                'CustomerPackLabour' => $customerPackLabour,
+
+                // SUPPLIER FIELDS
+                'SupplierWeight' => $validated['weight'],
+                'SupplierPricePerKg' => $validated['price_per_kg'] - $commissionAmount,
+                'SupplierTotal' => $validated['weight'] * ($validated['price_per_kg'] - $commissionAmount),
+                'SupplierPackCost' => $customerPackCost,
+                'SupplierPackLabour' => $customerPackLabour,
+
+                'Processed' => 'N',
+                'FirstTimeBillPrintedOn' => null,
+                'BillChangedOn' => null,
+                'CustomerBillEnteredOn' => now(),
+                'UniqueCode' => $uniqueCode,
+                'Date' => $settingDate,
+                'ip_address' => $request->ip(),
+                'given_amount' => $validated['given_amount'],
+
+                'bill_printed' => $billPrintedStatus,
+                'bill_no' => $billNo,
+
+                'commission_amount' => $commissionAmount,
+            ]);
+
+            DB::commit();
+
             return response()->json([
-                'error' => 'Item not found for the given item_code.'
+                'success' => true,
+                'data' => $sale->fresh()->toArray()
+            ]);
+
+        } catch (\Exception | \Illuminate\Database\QueryException $e) {
+            DB::rollBack();
+            Log::error('Failed to add sales entry: ' . $e->getMessage());
+
+            return response()->json([
+                'error' => 'Failed to add sales entry: ' . $e->getMessage()
             ], 422);
         }
-
-        $customerPackCost = $item->pack_cost ?? 0;
-        $customerPackLabour = $item->pack_due ?? 0;
-
-        // --- OTHER META DATA ---
-        $settingDate = Setting::value('value') ?? now()->toDateString();
-        $loggedInUserId = auth()->user()->user_id;
-        $uniqueCode = $validated['customer_code'] . '-' . $loggedInUserId;
-
-        $billPrintedStatus = $validated['bill_printed'] ?? null;
-        $billNo = $validated['bill_no'] ?? null;
-
-        // --- CREATE SALE RECORD ---
-        $sale = Sale::create([
-            'supplier_code' => $validated['supplier_code'],
-            'customer_code' => strtoupper($validated['customer_code']),
-            'customer_name' => $validated['customer_name'],
-
-            'code' => $validated['item_code'],
-            'item_code' => $validated['item_code'],
-            'item_name' => $validated['item_name'],
-            'weight' => $validated['weight'],
-            'price_per_kg' => $validated['price_per_kg'],
-            'pack_due' => $validated['pack_due'] ?? 0,
-            'total' => $validated['total'],
-            'packs' => $validated['packs'],
-
-            // ⭐ CUSTOMER FIELDS
-            'CustomerPackCost' => $customerPackCost,
-            'CustomerPackLabour' => $customerPackLabour,
-
-            // ⭐ SUPPLIER FIELDS (WITH COMMISSION SUBTRACTION)
-            'SupplierWeight' => $validated['weight'],
-            'SupplierPricePerKg' => $validated['price_per_kg'] - $commissionAmount,
-            'SupplierTotal' => $validated['weight'] * ($validated['price_per_kg'] - $commissionAmount),
-            'SupplierPackCost' => $customerPackCost,
-            'SupplierPackLabour' => $customerPackLabour,
-
-            'Processed' => 'N',
-            'FirstTimeBillPrintedOn' => null,
-            'BillChangedOn' => null,
-            'CustomerBillEnteredOn' => now(),
-            'UniqueCode' => $uniqueCode,
-            'Date' => $settingDate,
-            'ip_address' => $request->ip(),
-            'given_amount' => $validated['given_amount'],
-
-            'bill_printed' => $billPrintedStatus,
-            'bill_no' => $billNo,
-
-            'commission_amount' => $commissionAmount,
-        ]);
-
-        DB::commit();
-
-        return response()->json([
-            'success' => true,
-            'data' => $sale->fresh()->toArray()
-        ]);
-
-    } catch (\Exception | \Illuminate\Database\QueryException $e) {
-        DB::rollBack();
-        Log::error('Failed to add sales entry: ' . $e->getMessage());
-
-        return response()->json([
-            'error' => 'Failed to add sales entry: ' . $e->getMessage()
-        ], 422);
     }
-}
-
-
 
     public function markAllAsProcessed(Request $request)
     {

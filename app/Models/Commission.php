@@ -14,6 +14,10 @@ class Commission extends Model
         'item_name',
         'starting_price',
         'end_price',
-        'commission_amount', // <-- Corrected
+        'commission_amount',
+        'supplier_code',
+        'supplier_name',
+        'type',
+         // <-- Corrected
     ];
 }
