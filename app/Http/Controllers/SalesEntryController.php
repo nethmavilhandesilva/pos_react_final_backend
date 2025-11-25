@@ -176,15 +176,27 @@ class SalesEntryController extends Controller
             $pricePerKg = $validated['price_per_kg'];
             $commissionAmount = 0.00;
 
-            // --- 1. Check Commission by Item Code ---
-            $commissionRule = Commission::where('item_code', $validated['item_code'])->first();
+            // --------------------------------------
+            // 1. Check Commission by ITEM CODE + PRICE RANGE
+            // --------------------------------------
+            $commissionRule = Commission::where('item_code', $validated['item_code'])
+                ->where('starting_price', '<=', $pricePerKg)
+                ->where('end_price', '>=', $pricePerKg)
+                ->first();
 
-            // --- 2. Check Commission by Supplier Code ---
+            // --------------------------------------
+            // 2. Check Commission by SUPPLIER CODE + PRICE RANGE
+            // --------------------------------------
             if (!$commissionRule) {
-                $commissionRule = Commission::where('supplier_code', $validated['supplier_code'])->first();
+                $commissionRule = Commission::where('supplier_code', $validated['supplier_code'])
+                    ->where('starting_price', '<=', $pricePerKg)
+                    ->where('end_price', '>=', $pricePerKg)
+                    ->first();
             }
 
-            // --- 3. Check Global Commission Rules (type = 'Z') ---
+            // --------------------------------------
+            // 3. Check GLOBAL (Z) COMMISSION RULES + PRICE RANGE
+            // --------------------------------------
             if (!$commissionRule) {
                 $commissionRule = Commission::where('type', 'Z')
                     ->where('starting_price', '<=', $pricePerKg)
@@ -192,6 +204,7 @@ class SalesEntryController extends Controller
                     ->first();
             }
 
+            // Apply commission amount if found
             if ($commissionRule) {
                 $commissionAmount = $commissionRule->commission_amount;
             }

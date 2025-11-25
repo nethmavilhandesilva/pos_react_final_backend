@@ -110,6 +110,7 @@ class SupplierController extends Controller
         'total',
         'packs',
         'bill_no',
+        'SupplierTotal',
         DB::raw('DATE(created_at) as Date')
     )
     ->where('supplier_code', $supplierCode)
