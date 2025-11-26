@@ -1,19 +1,13 @@
 <?php
 
 return [
-    'paths' => ['api/*', '*'],
+    // config/cors.php
 
-    'allowed_methods' => ['*'],
-
-    'allowed_origins' => ['*'], // allow all for local dev
-
-    'allowed_origins_patterns' => [],
-
-    'allowed_headers' => ['*'],
-
-    'exposed_headers' => [],
-
-    'max_age' => 0,
-
-    'supports_credentials' => true,
+'paths' => ['api/*', 'suppliers/*'], // Ensure your paths cover the endpoint
+'allowed_methods' => ['*'], // MUST allow GET and OPTIONS
+'allowed_origins' => ['*'], // Or your frontend domain (e.g., 'http://localhost:3000')
+'allowed_headers' => ['Authorization', 'Content-Type', 'X-Requested-With'], // CRITICAL: Authorization must be listed!
+'exposed_headers' => [],
+'max_age' => 0,
+'supports_credentials' => false, // Set to true if you use cookies/session based auth
 ];

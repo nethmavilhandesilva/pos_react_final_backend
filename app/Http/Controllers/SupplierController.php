@@ -6,6 +6,8 @@ use App\Models\Supplier;
 use Illuminate\Http\Request;
 use App\Models\Sale;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Http\JsonResponse;
+use App\Models\SupplierBillNumber;
 
 class SupplierController extends Controller
 {
@@ -111,6 +113,7 @@ class SupplierController extends Controller
         'packs',
         'bill_no',
         'SupplierTotal',
+        'SupplierPricePerKg',
         DB::raw('DATE(created_at) as Date')
     )
     ->where('supplier_code', $supplierCode)
@@ -118,5 +121,42 @@ class SupplierController extends Controller
 
     return response()->json($details);
 }
+public function generateFSeriesBill(): JsonResponse
+    {
+        try {
+            $newBillNo = DB::transaction(function () {
+                
+                // --- CORRECTED CODE START ---
+                // 1. Get the single counter row (ID 1), applying the lock, and immediately fetching the result.
+                $counter = SupplierBillNumber::where('id', 1)->lockForUpdate()->first(); 
+                // --- CORRECTED CODE END ---
+
+                if (!$counter) {
+                    throw new \Exception("Bill counter configuration missing. Please check the 'supplier_bill_numbers' table.");
+                }
+
+                // 2. Increment the number (This is now safe as $counter is a Model instance)
+                $nextNumber = $counter->last_number + 1;
+                $newBillNo = $counter->prefix . $nextNumber;
+
+                // 3. Update the counter
+                $counter->last_number = $nextNumber;
+                $counter->save();
+
+                return $newBillNo;
+            });
+
+            // 4. Respond with the new number
+            return response()->json([
+                'new_bill_no' => $newBillNo,
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('Error generating sequential bill number: ' . $e->getMessage());
+            return response()->json([
+                'error' => 'Failed to generate sequential bill number. ' . $e->getMessage()
+            ], 500);
+        }
+    }
 
 }

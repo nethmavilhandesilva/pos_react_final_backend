@@ -115,7 +115,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // CUSTOMER LOAN FETCH
     Route::post('/get-loan-amount', [SalesEntryController::class, 'getLoanAmount']);
 
-
     // COMMISSIONS (CRUD)
     Route::resource('commissions', CommissionController::class)->except(['create', 'edit']);
+
+    //suplier bill number
+    Route::get('/generate-f-series-bill', [SupplierController::class, 'generateFSeriesBill']);
 });
+
