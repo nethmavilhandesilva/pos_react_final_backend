@@ -79,14 +79,14 @@ class SupplierController extends Controller
     {
         // Get distinct supplier_codes where 'bill_printed' is 'Y'
         $printedSuppliers = Sale::select('supplier_code')
-            ->where('bill_printed', 'Y')
+            ->where('supplier_bill_printed', 'Y')
             ->distinct()
             ->pluck('supplier_code')
             ->all();
 
         // Get distinct supplier_codes where 'bill_printed' is 'N'
         $unprintedSuppliers = Sale::select('supplier_code')
-            ->where('bill_printed', 'N')
+            ->where('supplier_bill_printed', 'N')
             ->distinct()
             ->pluck('supplier_code')
             ->all();
@@ -116,6 +116,8 @@ class SupplierController extends Controller
         'SupplierTotal',
         'SupplierPricePerKg',
         'SupplierPackCost',
+        'supplier_bill_printed',
+        'supplier_bill_no',
         DB::raw('DATE(created_at) as Date')
     )
     ->where('supplier_code', $supplierCode)
