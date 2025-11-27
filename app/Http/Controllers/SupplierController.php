@@ -104,6 +104,7 @@ class SupplierController extends Controller
 {
     $details = Sale::select(
         'supplier_code',
+         'id',
         'customer_code',
         'item_name',
         'weight',
@@ -114,6 +115,7 @@ class SupplierController extends Controller
         'bill_no',
         'SupplierTotal',
         'SupplierPricePerKg',
+        'SupplierPackCost',
         DB::raw('DATE(created_at) as Date')
     )
     ->where('supplier_code', $supplierCode)
@@ -121,6 +123,7 @@ class SupplierController extends Controller
 
     return response()->json($details);
 }
+
 public function generateFSeriesBill(): JsonResponse
     {
         try {
@@ -158,5 +161,78 @@ public function generateFSeriesBill(): JsonResponse
             ], 500);
         }
     }
+    public function getProfitBySupplier()
+    {
+        try {
+            // Eloquent/Query Builder aggregation:
+            // SELECT supplier_code, SUM(profit) AS total_profit FROM sales GROUP BY supplier_code
+            $profitReport = Sale::select('supplier_code')
+                ->selectRaw('SUM(profit) as total_profit')
+                ->groupBy('supplier_code')
+                ->orderByDesc('total_profit') // Optional: Order by highest profit
+                ->get();
 
+            // The resulting collection is automatically formatted as JSON:
+            // [{"supplier_code": "SUP001", "total_profit": "1500.50"}, ...]
+            return response()->json($profitReport);
+
+        } catch (\Exception $e) {
+            // Log the error for debugging
+            \Log::error('Error fetching profit by supplier:', ['exception' => $e->getMessage()]);
+
+            return response()->json([
+                'message' => 'Failed to fetch profit report data.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+    public function marksuppliers(Request $request): JsonResponse
+    {
+        // 1. Validate the incoming request data
+        $validated = $request->validate([
+            'bill_no' => 'required|string|max:255',
+            'transaction_ids' => 'required|array',
+            'transaction_ids.*' => 'integer|exists:sales,id', // !!! ADJUST TABLE NAME 'sales' IF NEEDED !!!
+        ]);
+
+        $billNo = $validated['bill_no'];
+        $ids = $validated['transaction_ids'];
+
+        try {
+            // 2. Wrap the update operation in a database transaction for atomicity
+            DB::beginTransaction();
+
+            // Use Sale::whereIn to update all selected records
+            $updatedCount = Sale::whereIn('id', $ids)
+                                // We check if they were not already processed (optional guard)
+                                ->where(function ($query) {
+                                    $query->whereNull('supplier_bill_no')
+                                          ->orWhere('supplier_bill_printed', 'N');
+                                })
+                                ->update([
+                                    'supplier_bill_no' => $billNo,
+                                    'supplier_bill_printed' => 'Y', 
+                                ]);
+
+            DB::commit();
+
+            if ($updatedCount > 0) {
+                 \Log::info("Supplier Bill $billNo successfully updated $updatedCount records.");
+            }
+
+            // 3. Respond with success
+            return response()->json([
+                'message' => 'Records successfully marked as printed.',
+                'updated_count' => $updatedCount
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack(); // Revert changes if an error occurs
+            \Log::error('Error marking supplier records as printed: ' . $e->getMessage());
+            return response()->json([
+                'error' => 'Failed to mark records as printed. Check server logs.',
+                'details' => $e->getMessage()
+            ], 500);
+        }
+    }
 }

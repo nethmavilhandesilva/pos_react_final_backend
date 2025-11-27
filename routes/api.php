@@ -120,5 +120,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     //suplier bill number
     Route::get('/generate-f-series-bill', [SupplierController::class, 'generateFSeriesBill']);
+    //supplier report
+    Route::get('sales/profit-by-supplier', [SupplierController::class, 'getProfitBySupplier']);
+    //supplier bill no
+    Route::post('/suppliers/mark-as-printed', [SupplierController::class, 'marksuppliers']);
 });
 

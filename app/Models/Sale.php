@@ -13,6 +13,7 @@ class Sale extends Model
     protected $fillable = [
 
         'customer_name',
+        'id',
         'customer_code',
         'supplier_code',
         'code',
@@ -46,6 +47,9 @@ class Sale extends Model
         'SupplierTotal',
         'SupplierPackCost',
         'SupplierPackLabour',
+        'profit',
+        'supplier_bill_printed',
+        'supplier_bill_no',
 
 
 
