@@ -75,27 +75,29 @@ class SupplierController extends Controller
         
         return response()->json($suppliers);
     }
-    public function getSupplierBillStatusSummary()
-    {
-        // Get distinct supplier_codes where 'bill_printed' is 'Y'
-        $printedSuppliers = Sale::select('supplier_code')
-            ->where('supplier_bill_printed', 'Y')
-            ->distinct()
-            ->pluck('supplier_code')
-            ->all();
+   public function getSupplierBillStatusSummary()
+{
+    // *** MODIFIED LOGIC ***
+    
+    // 1. Get all supplier codes and associated bill numbers where 'supplier_bill_printed' is 'Y'
+    // We select both fields, grouping by them to get distinct bills (even if supplier_code is the same).
+    $printedBills = Sale::select('supplier_code', 'supplier_bill_no')
+        ->where('supplier_bill_printed', 'Y')
+        ->groupBy('supplier_code', 'supplier_bill_no') // Ensure unique bills for a given supplier
+        ->get(); // Returns a Collection of objects (or arrays, depending on Laravel setup)
 
-        // Get distinct supplier_codes where 'bill_printed' is 'N'
-        $unprintedSuppliers = Sale::select('supplier_code')
-            ->where('supplier_bill_printed', 'N')
-            ->distinct()
-            ->pluck('supplier_code')
-            ->all();
-
-        return response()->json([
-            'printed' => $printedSuppliers,
-            'unprinted' => $unprintedSuppliers,
-        ]);
-    }
+    // 2. Get all supplier codes and associated bill numbers where 'supplier_bill_printed' is 'N'
+    $unprintedBills = Sale::select('supplier_code', 'supplier_bill_no')
+        ->where('supplier_bill_printed', 'N')
+        ->groupBy('supplier_code', 'supplier_bill_no')
+        ->get(); 
+        
+    // 3. Return the data as JSON, ensuring the output is an array of plain objects/arrays.
+    return response()->json([
+        'printed' => $printedBills->toArray(),
+        'unprinted' => $unprintedBills->toArray(),
+    ]);
+}
 
     /**
      * Get detailed sales records for a specific supplier code.
