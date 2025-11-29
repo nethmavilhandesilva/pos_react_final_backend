@@ -8,6 +8,7 @@ use App\Models\Sale;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\JsonResponse;
 use App\Models\SupplierBillNumber;
+use Illuminate\Support\Facades\Log;
 
 class SupplierController extends Controller
 {
@@ -190,53 +191,165 @@ public function generateFSeriesBill(): JsonResponse
             ], 500);
         }
     }
-    public function marksuppliers(Request $request): JsonResponse
-    {
-        // 1. Validate the incoming request data
-        $validated = $request->validate([
-            'bill_no' => 'required|string|max:255',
-            'transaction_ids' => 'required|array',
-            'transaction_ids.*' => 'integer|exists:sales,id', // !!! ADJUST TABLE NAME 'sales' IF NEEDED !!!
+   public function marksuppliers(Request $request): JsonResponse
+{
+    // 1. Validate the incoming request data
+    // NOTE: We only validate transaction_ids, as the bill_no will be generated here.
+    $validated = $request->validate([
+        'transaction_ids' => 'required|array',
+        'transaction_ids.*' => 'integer|exists:sales,id',
+    ]);
+
+    $ids = $validated['transaction_ids'];
+    $finalBillNo = null;
+
+    try {
+        // 2. Wrap the entire operation (Bill Generation + Records Update) in a database transaction for atomicity
+        DB::beginTransaction();
+
+        // --- BILL NUMBER GENERATION LOGIC (Moved from generateFSeriesBill) ---
+        
+        // 2a. Get the single counter row (ID 1), applying the lock.
+        $counter = SupplierBillNumber::where('id', 1)->lockForUpdate()->first(); 
+        
+        if (!$counter) {
+            DB::rollBack();
+            throw new \Exception("Bill counter configuration missing. Please check the 'supplier_bill_numbers' table.");
+        }
+
+        // 2b. Increment and generate the new bill number
+        $nextNumber = $counter->last_number + 1;
+        $finalBillNo = $counter->prefix . $nextNumber;
+
+        // 2c. Update the counter
+        $counter->last_number = $nextNumber;
+        $counter->save();
+        
+        // --- END BILL NUMBER GENERATION ---
+
+
+        // 3. Use the generated $finalBillNo to update the selected records
+        $updatedCount = Sale::whereIn('id', $ids)
+                            // We check if they were not already processed (optional guard)
+                            ->where(function ($query) {
+                                $query->whereNull('supplier_bill_no')
+                                      ->orWhere('supplier_bill_printed', 'N');
+                            })
+                            ->update([
+                                'supplier_bill_no' => $finalBillNo, // Use the generated number
+                                'supplier_bill_printed' => 'Y', 
+                            ]);
+
+        DB::commit();
+
+        if ($updatedCount > 0) {
+            Log::info("Supplier Bill $finalBillNo successfully generated and updated $updatedCount records.");
+        } else {
+            // Optional: If no records updated but bill number was generated, you might want to throw an error 
+            // or revert the counter, depending on business logic. For now, we proceed.
+        }
+
+        // 4. Respond with success, including the generated bill number
+        return response()->json([
+            'message' => 'Records successfully marked as printed.',
+            'updated_count' => $updatedCount,
+            'new_bill_no' => $finalBillNo, // Send the new number back to the frontend
         ]);
 
-        $billNo = $validated['bill_no'];
-        $ids = $validated['transaction_ids'];
+    } catch (\Exception $e) {
+        DB::rollBack(); // Revert changes if an error occurs
+        Log::error('Error marking supplier records as printed: ' . $e->getMessage());
+        return response()->json([
+            'error' => 'Failed to mark records as printed. Check server logs.',
+            'details' => $e->getMessage()
+        ], 500);
+    }
+}
+    
 
+    /**
+     * Get details for a specific bill number
+     */
+    public function getUnprintedDetails($supplierCode): JsonResponse
+    {
         try {
-            // 2. Wrap the update operation in a database transaction for atomicity
-            DB::beginTransaction();
+            // Requirement: Records for the given supplier_code where supplier_bill_printed is 'N' or NULL.
+            $details = Sale::select(
+                'id', 
+                'supplier_code',
+                'customer_code',
+                'item_name',
+                'weight',
+                'price_per_kg',
+                'commission_amount',
+                'total', // Assuming this is for customer sale total
+                'packs',
+                'bill_no', // Original customer bill no
+                'SupplierTotal', // Supplier's gross total for the sale
+                'SupplierPricePerKg',
+                'SupplierPackCost',
+                'supplier_bill_printed',
+                'supplier_bill_no',
+                DB::raw('DATE(created_at) as Date')
+            )
+            ->where('supplier_code', $supplierCode)
+            ->where(function ($query) {
+                $query->where('supplier_bill_printed', 'N')
+                      ->orWhereNull('supplier_bill_printed');
+            })
+            ->whereNotNull('supplier_code') // Ensure a supplier code is present
+            ->get();
 
-            // Use Sale::whereIn to update all selected records
-            $updatedCount = Sale::whereIn('id', $ids)
-                                // We check if they were not already processed (optional guard)
-                                ->where(function ($query) {
-                                    $query->whereNull('supplier_bill_no')
-                                          ->orWhere('supplier_bill_printed', 'N');
-                                })
-                                ->update([
-                                    'supplier_bill_no' => $billNo,
-                                    'supplier_bill_printed' => 'Y', 
-                                ]);
-
-            DB::commit();
-
-            if ($updatedCount > 0) {
-                 \Log::info("Supplier Bill $billNo successfully updated $updatedCount records.");
-            }
-
-            // 3. Respond with success
-            return response()->json([
-                'message' => 'Records successfully marked as printed.',
-                'updated_count' => $updatedCount
-            ]);
+            return response()->json($details);
 
         } catch (\Exception $e) {
-            DB::rollBack(); // Revert changes if an error occurs
-            \Log::error('Error marking supplier records as printed: ' . $e->getMessage());
+            Log::error("Error fetching unprinted details for supplier {$supplierCode}: " . $e->getMessage());
             return response()->json([
-                'error' => 'Failed to mark records as printed. Check server logs.',
+                'error' => 'Failed to fetch unprinted details',
                 'details' => $e->getMessage()
             ], 500);
         }
     }
+
+    /**
+     * Get details for a specific supplier bill number.
+     * This is used when clicking a bill in the 'Printed Bills' section.
+     */
+    public function getBillDetails($billNo): JsonResponse
+    {
+        try {
+            // Requirement: Records with the exact supplier_bill_no and marked 'Y'.
+            $details = Sale::select(
+                'id',
+                'supplier_code',
+                'customer_code',
+                'item_name',
+                'weight',
+                'price_per_kg',
+                'commission_amount',
+                'total', // Assuming this is for customer sale total
+                'packs',
+                'bill_no', // Original customer bill no
+                'SupplierTotal', // Supplier's gross total for the sale
+                'SupplierPricePerKg',
+                'SupplierPackCost',
+                'supplier_bill_printed',
+                'supplier_bill_no',
+                DB::raw('DATE(created_at) as Date')
+            )
+            ->where('supplier_bill_no', $billNo)
+            ->where('supplier_bill_printed', 'Y')
+            ->get();
+
+            return response()->json($details);
+
+        } catch (\Exception $e) {
+            Log::error("Error fetching details for bill {$billNo}: " . $e->getMessage());
+            return response()->json([
+                'error' => 'Failed to fetch bill details',
+                'details' => $e->getMessage()
+            ], 500);
+        }
+    }
+
 }

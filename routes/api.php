@@ -124,5 +124,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('sales/profit-by-supplier', [SupplierController::class, 'getProfitBySupplier']);
     //supplier bill no
     Route::post('/suppliers/mark-as-printed', [SupplierController::class, 'marksuppliers']);
+    Route::get('/suppliers/bill/{billNo}/details', [SupplierController::class, 'getBillDetails']);
+    Route::get('/suppliers/{supplierCode}/unprinted-details', [SupplierController::class, 'getUnprintedDetails']);
 });
 
