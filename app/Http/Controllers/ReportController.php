@@ -85,65 +85,81 @@ class ReportController extends Controller
         ]);
     }
     public function getweight(Request $request)
-    {
-        $grnCode = $request->input('grn_code');
-        $startDate = $request->input('start_date');
-        $endDate = $request->input('end_date');
+{
+    $grnCode = $request->input('grn_code');
+    $startDate = $request->input('start_date');
+    $endDate = $request->input('end_date');
+    $supplierCode = $request->input('supplier_code');
 
-        // Determine whether to use SalesHistory or Sale
-        if ($startDate && $endDate) {
-            $query = SalesHistory::selectRaw('
-                sales_histories.item_name,
-                sales_histories.item_code,
-                SUM(sales_histories.price_per_kg) as price_per_kg,
-                SUM(sales_histories.packs) as packs,
-                SUM(sales_histories.weight) as weight,
-                SUM(sales_histories.total) as total,
-                items.pack_due
-            ')
-                ->leftJoin('items', 'sales_histories.item_code', '=', 'items.no')
-                ->whereBetween('sales_histories.Date', [
-                    Carbon::parse($startDate)->startOfDay(),
-                    Carbon::parse($endDate)->endOfDay()
-                ]);
-        } else {
-            $query = Sale::selectRaw('
-                sales.item_name,
-                sales.item_code,
-                SUM(sales.price_per_kg) as price_per_kg,
-                SUM(sales.packs) as packs,
-                SUM(sales.weight) as weight,
-                SUM(sales.total) as total,
-                items.pack_due
-            ')
-                ->leftJoin('items', 'sales.item_code', '=', 'items.no');
-        }
+    // ⭐ Decide which model to use
+    if ($startDate && $endDate) {
+        $model = SalesHistory::query();
+        $dateColumn = 'Date';
+    } else {
+        $model = Sale::query();
+        $dateColumn = null;
+    }
 
-        // Filter by GRN code if provided
-        if (!empty($grnCode)) {
-            $query->where('sales.code', $grnCode)
-                ->orWhere('sales_histories.code', $grnCode);
-        }
+    // ⭐ Select aggregated totals (no joins here)
+    $query = $model->selectRaw("
+        item_code,
+        item_name,
+        SUM(packs) AS packs,
+        SUM(weight) AS weight,
+        SUM(total) AS total
+    ");
 
-        // Group by item and pack_due (since it's per item)
-        $sales = $query->groupBy('sales.item_name', 'sales.item_code', 'items.pack_due')
-            ->orderBy('sales.item_name', 'asc')
-            ->get();
-
-        // Fetch GRN entry if a code is given
-        $selectedGrnEntry = !empty($grnCode)
-            ? GrnEntry::where('code', $grnCode)->first()
-            : null;
-
-        return response()->json([
-            'sales' => $sales,
-            'selectedGrnCode' => $grnCode,
-            'selectedGrnEntry' => $selectedGrnEntry,
-            'startDate' => $startDate,
-            'endDate' => $endDate,
-            'filters' => $request->all(),
+    // ⭐ Filter by date range
+    if ($dateColumn) {
+        $query->whereBetween($dateColumn, [
+            Carbon::parse($startDate)->startOfDay(),
+            Carbon::parse($endDate)->endOfDay(),
         ]);
     }
+
+    // ⭐ Filter by supplier
+    if (!empty($supplierCode)) {
+        $query->where('supplier_code', $supplierCode);
+    }
+
+    // ⭐ Filter by GRN Code
+    if (!empty($grnCode)) {
+        $query->where('code', $grnCode);
+    }
+
+    // ⭐ Aggregate per item
+    $sales = $query
+        ->groupBy('item_code', 'item_name')
+        ->orderBy('item_name', 'asc')
+        ->get();
+
+    // ⭐ Add pack_due from items table
+    $sales = $sales->map(function ($sale) {
+        $item = Item::where('no', $sale->item_code)->first();
+        $sale->pack_due = $item ? $item->pack_due : null;
+        return $sale;
+    });
+
+    $final_total = $sales->sum('total');
+
+    // ⭐ Fetch GRN entry
+    $selectedGrnEntry = !empty($grnCode)
+        ? GrnEntry::where('code', $grnCode)->first()
+        : null;
+
+    // ⭐ React expects JSON — NOT a Blade view
+    return response()->json([
+        'sales' => $sales,
+        'selectedGrnCode' => $grnCode,
+        'selectedGrnEntry' => $selectedGrnEntry,
+        'startDate' => $startDate,
+        'endDate' => $endDate,
+        'supplierCode' => $supplierCode,
+        'filters' => $request->all(),
+        'final_total' => $final_total,
+    ]);
+}
+
 
     public function getGrnEntries()
     {
