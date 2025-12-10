@@ -223,7 +223,7 @@ class SalesEntryController extends Controller
 
         // --- CALCULATE SUPPLIER PRICE AND TOTAL ---
        $supplierPricePerKg = abs($validated['price_per_kg'] - $commissionAmount);
-        $supplierTotal = $validated['weight'] * $supplierPricePerKg;
+       $supplierTotal = $validated['weight'] * $supplierPricePerKg;
 
         // ⭐ NEW CALCULATION: PROFIT
         // Profit = Customer Total - Supplier Total
@@ -404,120 +404,244 @@ class SalesEntryController extends Controller
         });
     }
 
-    public function update(Request $request, Sale $sale)
-    {
-        $validatedData = $request->validate([
-            'customer_code' => 'required|string|max:255',
-            'customer_name' => 'nullable|string|max:255',
-            'code' => 'required|string|max:255',
-            'supplier_code' => 'nullable|string|max:255',
-            'item_code' => 'required|string|max:255',
-            'item_name' => 'required|string|max:255',
-            'weight' => 'required|numeric|min:0',
-            'price_per_kg' => 'required|numeric|min:0',
-            'pack_due' => 'nullable|numeric|min:0', // ✅ ADDED
-            'total' => 'required|numeric|min:0',
-            'packs' => 'required|integer|min:0',
-            'grn_entry_code' => 'nullable|string|max:255', // ✅ ADDED
-            'original_weight' => 'nullable|numeric|min:0', // ✅ ADDED
-            'original_packs' => 'nullable|integer|min:0', // ✅ ADDED
-            'given_amount' => 'nullable|numeric|min:0', // ✅ ADDED
-            'bill_no' => 'nullable|string|max:255', // ✅ ADDED
-            'bill_printed' => 'nullable|string|in:N,Y', // ✅ ADDED
+public function update(Request $request, Sale $sale)
+{
+    // --- 1. Validation including new optional flag for price sync ---
+    $validatedData = $request->validate([
+        'customer_code' => 'required|string|max:255',
+        'customer_name' => 'nullable|string|max:255',
+        'supplier_code' => 'nullable|string|max:255',
+        'item_code' => 'required|string|max:255',
+        'item_name' => 'required|string|max:255',
+        'weight' => 'required|numeric|min:0',
+        'price_per_kg' => 'required|numeric|min:0',
+        'pack_due' => 'nullable|numeric|min:0',
+        'total' => 'required|numeric|min:0',
+        'packs' => 'required|integer|min:0',
+        'given_amount' => 'nullable|numeric|min:0',
+        'bill_no' => 'nullable|string|max:255',
+        'bill_printed' => 'nullable|string|in:N,Y',
+        
+        // New optional field to trigger bulk price update
+        'update_related_price' => 'nullable|boolean', 
+    ]);
+
+    DB::beginTransaction();
+    $affectedSales = [];
+    $originalData = []; // FIX: Initialize for proper scope management
+
+    try {
+        $settingDate = Setting::value('value');
+        $formattedDate = Carbon::parse($settingDate)->format('Y-m-d');
+        
+        // =============================================================
+        // ⭐ COMMISSION AND PRICE RE-CALCULATION BLOCK
+        // =============================================================
+        $newPricePerKg = $validatedData['price_per_kg'];
+        $commissionAmount = 0.00;
+        
+        // 1. Find Commission Rule (Replicating logic from store method)
+        $commissionRule = Commission::where('item_code', $validatedData['item_code'])
+            ->where('starting_price', '<=', $newPricePerKg)
+            ->where('end_price', '>=', $newPricePerKg)
+            ->orWhere(function ($query) use ($validatedData, $sale, $newPricePerKg) {
+                $query->where('supplier_code', $validatedData['supplier_code'] ?? $sale->supplier_code)
+                      ->where('starting_price', '<=', $newPricePerKg)
+                      ->where('end_price', '>=', $newPricePerKg);
+            })
+            ->orWhere(function ($query) use ($newPricePerKg) {
+                $query->where('type', 'Z')
+                      ->where('starting_price', '<=', $newPricePerKg)
+                      ->where('end_price', '>=', $newPricePerKg);
+            })
+            ->first();
+
+        if ($commissionRule) {
+            $commissionAmount = $commissionRule->commission_amount;
+        }
+
+        // 2. Calculate Supplier Price and Total
+        $supplierPricePerKg = abs($newPricePerKg - $commissionAmount);
+        
+        // Fetch the Item to get CustomerPackLabour for Total calculation
+        $item = Item::where('no', $validatedData['item_code'])->first();
+        if (!$item) {
+             throw new \Exception('Item not found for calculation.');
+        }
+        $customerPackLabour = $item->pack_due ?? 0;
+        
+        // 3. Re-calculate all total fields for the main updated record
+        $newSupplierTotal = $validatedData['weight'] * $supplierPricePerKg;
+        // Customer Total: weight * price_per_kg + packs * CustomerPackLabour
+        $newTotal = $validatedData['weight'] * $newPricePerKg + $validatedData['packs'] * $customerPackLabour; 
+        $newProfit = $newTotal - $newSupplierTotal;
+        // =============================================================
+
+        // --- Track original if bill_printed ('Y' status) ---
+        if ($sale->bill_printed === 'Y') {
+            $originalData = $sale->toArray(); 
+
+            Salesadjustment::create([
+                 'customer_code' => $originalData['customer_code'],
+                 'supplier_code' => $originalData['supplier_code'] ?? null,
+                 'code' => $originalData['item_code'],
+                 'item_code' => $originalData['item_code'],
+                 'item_name' => $originalData['item_name'],
+                 'weight' => $originalData['weight'],
+                 'price_per_kg' => $originalData['price_per_kg'],
+                 'pack_due' => $originalData['pack_due'] ?? 0,
+                 'total' => $originalData['total'],
+                 'packs' => $originalData['packs'],
+                 'bill_no' => $originalData['bill_no'],
+                 'user_id' => 'c11',
+                 'type' => 'original',
+                 'original_created_at' => \Carbon\Carbon::parse($sale->Date)
+                     ->setTimeFrom(\Carbon\Carbon::parse($sale->created_at))
+                     ->format('Y-m-d H:i:s'),
+                 'original_updated_at' => $sale->updated_at,
+                 'Date' => $formattedDate,
+            ]);
+        }
+
+        // --- Update the sale (main record) ---
+        $sale->update([
+            'customer_code' => $validatedData['customer_code'],
+            'customer_name' => $validatedData['customer_name'] ?? $sale->customer_name,
+            'code' => $validatedData['item_code'],
+            'supplier_code' => $validatedData['supplier_code'] ?? $sale->supplier_code,
+            'item_code' => $validatedData['item_code'],
+            'item_name' => $validatedData['item_name'],
+            'weight' => $validatedData['weight'],
+            'packs' => $validatedData['packs'],
+            
+            // ⭐ UPDATED FIELDS WITH NEW CALCULATIONS
+            'price_per_kg' => $newPricePerKg, 
+            'commission_amount' => $commissionAmount, 
+            'SupplierPricePerKg' => $supplierPricePerKg, 
+            'SupplierTotal' => $newSupplierTotal, 
+            'total' => $newTotal, // Use calculated Customer Total
+            'profit' => $newProfit, // Use calculated Profit
+            // ⭐ END UPDATED FIELDS
+
+            'pack_due' => $validatedData['pack_due'] ?? $sale->pack_due,
+            'given_amount' => $validatedData['given_amount'] ?? $sale->given_amount,
+            'bill_no' => $validatedData['bill_no'] ?? $sale->bill_no,
+            'bill_printed' => $validatedData['bill_printed'] ?? $sale->bill_printed,
+            'updated' => 'Y',
+            'BillChangedOn' => now(),
+        ]);
+        
+        // --- 2. Bulk Price Update Logic (Based on Print Status) ---
+        if ($request->input('update_related_price') === true) {
+            $customerCode = $validatedData['customer_code'];
+            $itemCode = $validatedData['item_code'];
+            $supplierCode = $validatedData['supplier_code'] ?? $sale->supplier_code;
+
+            // Start building the query to find related sales
+            $updateQuery = Sale::where('customer_code', $customerCode)
+                ->where('item_code', $itemCode)
+                ->where('supplier_code', $supplierCode)
+                ->where('id', '!=', $sale->id); // Exclude the current sale
+
+            $currentBillPrinted = $sale->bill_printed === 'Y';
+            $currentBillNo = $sale->bill_no;
+
+            if ($currentBillPrinted && $currentBillNo) {
+                // Scenario 1: Update a PRINTED record. Sync price ONLY within the same bill.
+                $updateQuery->where('bill_printed', 'Y')->where('bill_no', $currentBillNo);
+            } else {
+                // Scenario 2: Update an UNPRINTED ('N' or null) record. Sync price across all UNPRINTED sales.
+                $updateQuery->where(function ($query) {
+                    $query->where('bill_printed', 'N')->orWhereNull('bill_printed');
+                });
+            }
+
+            // --- BULK UPDATE with DB::raw for calculated fields ---
+            $updatedSalesCount = $updateQuery->update([
+                'price_per_kg' => $newPricePerKg,
+                'commission_amount' => $commissionAmount,
+                'SupplierPricePerKg' => $supplierPricePerKg,
+                
+                // Recalculate Customer Total
+                // Assuming 'CustomerPackLabour' and 'weight' are columns on the 'sales' table
+                'total' => DB::raw("weight * $newPricePerKg + packs * CustomerPackLabour"), 
+                
+                // Recalculate Supplier Total
+                'SupplierTotal' => DB::raw("weight * $supplierPricePerKg"), 
+                
+                // Recalculate Profit: Customer Total - Supplier Total
+                'profit' => DB::raw(" (weight * $newPricePerKg + packs * CustomerPackLabour) - (weight * $supplierPricePerKg) "), 
+                
+                'updated' => 'Y',
+            ]);
+
+            // Fetch the list of ALL affected sales (the main one + the bulk updated ones)
+            $affectedSales = Sale::where('customer_code', $customerCode)
+                ->where('item_code', $itemCode)
+                ->where('supplier_code', $supplierCode);
+
+            if ($currentBillPrinted && $currentBillNo) {
+                $affectedSales->where('bill_printed', 'Y')->where('bill_no', $currentBillNo);
+            } else {
+                $affectedSales->where(function ($query) {
+                    $query->where('bill_printed', 'N')->orWhereNull('bill_printed');
+                });
+            }
+            
+            $affectedSales = $affectedSales->get();
+
+        } else {
+            // Only the main record was updated
+            $affectedSales = collect([$sale->fresh()]); 
+        }
+        
+        // --- Update GRN remaining stock safely (existing logic) ---
+        $this->updateGrnRemainingStock($validatedData['item_code']);
+
+        // --- Track updated sale if bill_printed (FIXED LOGIC) ---
+        // Create an 'updated' adjustment record if an 'original' one was created
+        if (!empty($originalData)) { 
+            $newData = $sale->fresh(); 
+
+            Salesadjustment::create([
+                 'customer_code' => $newData['customer_code'],
+                 'supplier_code' => $newData['supplier_code'] ?? null,
+                 'code' => $newData['item_code'],
+                 'item_code' => $newData['item_code'],
+                 'item_name' => $newData['item_name'],
+                 'weight' => $newData['weight'],
+                 'price_per_kg' => $newData['price_per_kg'],
+                 'pack_due' => $newData['pack_due'] ?? 0,
+                 'total' => $newData['total'],
+                 'packs' => $newData['packs'],
+                 'bill_no' => $newData['bill_no'],
+                 'user_id' => 'c11',
+                 'type' => 'updated',
+                 'original_created_at' => \Carbon\Carbon::parse($sale->Date)
+                     ->setTimeFrom(\Carbon\Carbon::parse($sale->created_at))
+                     ->format('Y-m-d H:i:s'),
+                 'original_updated_at' => $sale->updated_at,
+                 'Date' => $formattedDate,
+            ]);
+        }
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'sales' => $affectedSales->toArray(), 
         ]);
 
-        try {
-            // Get the setting date value
-            $settingDate = Setting::value('value');
-            $formattedDate = Carbon::parse($settingDate)->format('Y-m-d');
+    } catch (\Exception $e) {
+        DB::rollBack();
+        Log::error('Failed to update sales record: ' . $e->getMessage());
 
-            $oldPacks = $sale->packs;
-            $oldWeight = $sale->weight;
-
-            // --- Adjustment tracking for bill_printed ---
-            if ($sale->bill_printed === 'Y') {
-                $originalData = $sale->toArray();
-                Salesadjustment::create([
-                    'customer_code' => $originalData['customer_code'],
-                    'supplier_code' => $originalData['supplier_code'] ?? null,
-                    'code' => $originalData['code'],
-                    'item_code' => $originalData['item_code'],
-                    'item_name' => $originalData['item_name'],
-                    'weight' => $originalData['weight'],
-                    'price_per_kg' => $originalData['price_per_kg'],
-                    'pack_due' => $originalData['pack_due'] ?? 0, // ✅ ADDED
-                    'total' => $originalData['total'],
-                    'packs' => $originalData['packs'],
-                    'bill_no' => $originalData['bill_no'],
-                    'user_id' => 'c11',
-                    'type' => 'original',
-                    'original_created_at' => Carbon::parse($sale->Date)
-                        ->setTimeFrom(Carbon::parse($sale->created_at))
-                        ->format('Y-m-d H:i:s'),
-                    'original_updated_at' => $sale->updated_at,
-                    'Date' => $formattedDate,
-                ]);
-            }
-
-            // ✅ Update the sale safely with null coalescing
-            $sale->update([
-                'customer_code' => $validatedData['customer_code'],
-                'customer_name' => $validatedData['customer_name'] ?? $sale->customer_name,
-                'code' => $validatedData['code'],
-                'supplier_code' => $validatedData['supplier_code'] ?? $sale->supplier_code,
-                'item_code' => $validatedData['item_code'],
-                'item_name' => $validatedData['item_name'],
-                'weight' => $validatedData['weight'],
-                'packs' => $validatedData['packs'],
-                'price_per_kg' => $validatedData['price_per_kg'],
-                'pack_due' => $validatedData['pack_due'] ?? $sale->pack_due, // ✅ ADDED
-                'total' => $validatedData['total'],
-                'grn_entry_code' => $validatedData['grn_entry_code'] ?? $sale->grn_entry_code, // ✅ ADDED
-                'original_weight' => $validatedData['original_weight'] ?? $sale->original_weight, // ✅ ADDED
-                'original_packs' => $validatedData['original_packs'] ?? $sale->original_packs, // ✅ ADDED
-                'given_amount' => $validatedData['given_amount'] ?? $sale->given_amount, // ✅ ADDED
-                'bill_no' => $validatedData['bill_no'] ?? $sale->bill_no, // ✅ ADDED
-                'bill_printed' => $validatedData['bill_printed'] ?? $sale->bill_printed, // ✅ ADDED
-                'updated' => 'Y',
-                'BillChangedOn' => now(),
-            ]);
-
-            $this->updateGrnRemainingStock($validatedData['code']);
-
-            // Save updated version as adjustment if needed
-            if ($sale->bill_printed === 'Y') {
-                $newData = $sale->fresh();
-                Salesadjustment::create([
-                    'customer_code' => $newData->customer_code,
-                    'supplier_code' => $newData->supplier_code ?? null,
-                    'code' => $newData->code,
-                    'item_code' => $newData->item_code,
-                    'item_name' => $newData->item_name,
-                    'weight' => $newData->weight,
-                    'price_per_kg' => $newData->price_per_kg,
-                    'pack_due' => $newData->pack_due ?? 0, // ✅ ADDED
-                    'total' => $newData->total,
-                    'packs' => $newData->packs,
-                    'bill_no' => $newData->bill_no,
-                    'user_id' => 'c11',
-                    'type' => 'updated',
-                    'original_created_at' => $newData->created_at,
-                    'original_updated_at' => $newData->updated_at,
-                    'Date' => $formattedDate,
-                ]);
-            }
-
-            return response()->json([
-                'success' => true,
-                'sale' => $sale->fresh(),
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to update sales record: ' . $e->getMessage(),
-            ], 500);
-        }
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to update sales record: ' . $e->getMessage(),
+        ], 500);
     }
+}
 
     public function destroy(Sale $sale)
     {
