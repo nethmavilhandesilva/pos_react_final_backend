@@ -119,6 +119,7 @@ class SupplierController extends Controller
         'SupplierTotal',
         'SupplierPricePerKg',
         'SupplierPackCost',
+        'CustomerPackLabour',
         'supplier_bill_printed',
         'supplier_bill_no',
         DB::raw('DATE(created_at) as Date')
