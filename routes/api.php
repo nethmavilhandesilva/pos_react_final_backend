@@ -126,5 +126,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/suppliers/mark-as-printed', [SupplierController::class, 'marksuppliers']);
     Route::get('/suppliers/bill/{billNo}/details', [SupplierController::class, 'getBillDetails']);
     Route::get('/suppliers/{supplierCode}/unprinted-details', [SupplierController::class, 'getUnprintedDetails']);
+    //Day Process
+    Route::post('/sales/process-day', [SalesEntryController::class, 'processDay']);
 });
 

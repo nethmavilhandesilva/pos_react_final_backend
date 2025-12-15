@@ -856,5 +856,75 @@ public function update(Request $request, Sale $sale)
             'sale' => $sale
         ]);
     }
+    public function processDay(Request $request)
+    {
+        // 1. Define the date to be recorded in settings 
+        $processLogDate = now()->toDateString(); 
+
+        // 2. Get ALL sales records
+        $allSales = Sale::all();
+        $totalRecordsToMove = $allSales->count();
+
+        if ($totalRecordsToMove === 0) {
+            return response()->json([
+                'success' => false,
+                'message' => "The sales table is already empty. No records to move."
+            ], 404);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            $historyData = [];
+            
+            // Get the list of columns allowed in the Sale model to ensure we only transfer those.
+            $allowedColumns = (new Sale())->getFillable();
+
+            foreach ($allSales as $sale) {
+                // Get the attributes as an array
+                $data = $sale->getAttributes();
+                
+                // ⚠️ CRITICAL STEP: Remove the primary key 'id' 
+                // so the history table uses its own auto-increment ID
+                unset($data['id']); 
+                
+                // If you had any extra columns in 'sales' not in 'sales_histories', 
+                // you would unset them here. Since they match, we rely on $fillable.
+                
+                $historyData[] = $data;
+            }
+
+            // 4. Bulk Insert into history table
+            SalesHistory::insert($historyData);
+            
+            // 5. Delete ALL records from the sales table
+            // Use truncate for faster deletion and auto-increment reset.
+            Sale::truncate(); 
+
+            // 6. Update the 'settings' table with the date of the cleanup
+            Setting::updateOrCreate(
+                ['key' => 'LastDayProcessDate'], 
+                ['value' => $processLogDate]
+            );
+
+            DB::commit(); 
+
+            return response()->json([
+                'success' => true,
+                'message' => "Successfully moved all **$totalRecordsToMove** sales records to history. Last processed date logged as: $processLogDate.",
+                'date' => $processLogDate
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            \Log::error("Mass Sales Process Failed: " . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                // Return a more user-friendly message, but include the technical error for debugging
+                'message' => "Mass day process failed due to a server error. Database rolled back. Error Detail: " . $e->getMessage()
+            ], 500);
+        }
+    }
 
 }
