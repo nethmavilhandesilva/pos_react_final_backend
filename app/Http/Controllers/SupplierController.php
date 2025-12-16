@@ -78,58 +78,76 @@ class SupplierController extends Controller
     }
    public function getSupplierBillStatusSummary()
 {
-    // *** MODIFIED LOGIC ***
-    
-    // 1. Get all supplier codes and associated bill numbers where 'supplier_bill_printed' is 'Y'
-    // We select both fields, grouping by them to get distinct bills (even if supplier_code is the same).
+    // 1. Get all distinct PRINTED bills (where a bill number has been successfully assigned and printed)
     $printedBills = Sale::select('supplier_code', 'supplier_bill_no')
         ->where('supplier_bill_printed', 'Y')
-        ->groupBy('supplier_code', 'supplier_bill_no') // Ensure unique bills for a given supplier
-        ->get(); // Returns a Collection of objects (or arrays, depending on Laravel setup)
-
-    // 2. Get all supplier codes and associated bill numbers where 'supplier_bill_printed' is 'N'
-    $unprintedBills = Sale::select('supplier_code', 'supplier_bill_no')
-        ->where('supplier_bill_printed', 'N')
+        ->whereNotNull('supplier_bill_no') // Essential guard: must have a bill number
         ->groupBy('supplier_code', 'supplier_bill_no')
+        ->get();
+        
+    $unprintedBills = Sale::select('supplier_code')
+        ->where(function ($query) {
+            $query->where('supplier_bill_printed', 'N')
+                  ->orWhereNull('supplier_bill_printed'); // Includes records not yet processed
+        })
+        ->whereNotNull('supplier_code') // Only include records assigned to a supplier
+        ->groupBy('supplier_code') // Group only by code, as there is no bill_no yet
         ->get(); 
         
-    // 3. Return the data as JSON, ensuring the output is an array of plain objects/arrays.
+    // 3. Return the data as JSON
     return response()->json([
         'printed' => $printedBills->toArray(),
         'unprinted' => $unprintedBills->toArray(),
     ]);
 }
-
-    /**
-     * Get detailed sales records for a specific supplier code.
-     */
   public function getSupplierDetails($supplierCode)
 {
-    $details = Sale::select(
-        'supplier_code',
-         'id',
-        'customer_code',
-        'item_name',
-        'weight',
-        'price_per_kg',
-        'commission_amount',
-        'total',
-        'packs',
-        'bill_no',
-        'SupplierTotal',
-        'SupplierPricePerKg',
-        'SupplierPackCost',
-        'CustomerPackLabour',
-        'supplier_bill_printed',
-        'supplier_bill_no',
-        DB::raw('DATE(created_at) as Date')
-    )
-    ->where('supplier_code', $supplierCode)
-    ->get();
+    Log::info('getSupplierDetails METHOD TRIGGERED', [
+        'supplierCode' => $supplierCode,
+        'route' => request()->path(),
+        'method' => request()->method(),
+        'user_id' => auth()->id(),
+    ]);
 
-    return response()->json($details);
+    try {
+        $details = Sale::select(
+            'supplier_code',
+            'id',
+            'customer_code',
+            'item_name',
+            'weight',
+            'price_per_kg',
+            'commission_amount',
+            'total',
+            'packs',
+            'bill_no',
+            'SupplierTotal',
+            'SupplierPricePerKg',
+            'SupplierPackCost',
+            'CustomerPackLabour',
+            'supplier_bill_printed',
+            'supplier_bill_no',
+            DB::raw('DATE(created_at) as Date')
+        )
+        ->where('supplier_code', $supplierCode)
+        ->get();
+
+        Log::info('getSupplierDetails QUERY SUCCESS', [
+            'records' => $details->count()
+        ]);
+
+        return response()->json($details);
+
+    } catch (\Throwable $e) {
+        Log::error('getSupplierDetails FAILED', [
+            'error' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+        ]);
+
+        throw $e;
+    }
 }
-
 public function generateFSeriesBill(): JsonResponse
     {
         try {
