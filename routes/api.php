@@ -128,5 +128,22 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/suppliers/{supplierCode}/unprinted-details', [SupplierController::class, 'getUnprintedDetails']);
     //Day Process
     Route::post('/sales/process-day', [SalesEntryController::class, 'processDay']);
+
+    //loan section
+    Route::get('/customers-loans/data', [CustomersLoanController::class, 'getInitialData']); // NEW: For Customers, GRN Codes
+    Route::get('/customers-loans/index', [CustomersLoanController::class, 'index']); // Get today's loans
+
+    // Loan CRUD (using the existing methods)
+    Route::post('/customers-loans', [CustomersLoanController::class, 'store']);
+    // Note: React will use POST with _method=PUT to hit this route
+    Route::post('/customers-loans/{id}', [CustomersLoanController::class, 'updateApi']); 
+    Route::delete('/customers-loans/{id}', [CustomersLoanController::class, 'destroy']);
+
+    // Utility Endpoints
+    Route::get('/customers/{customerId}/loans-total', [CustomersLoanController::class, 'getTotalLoanAmount']); 
+    Route::post('/settings/updateBalance', [CustomersLoanController::class, 'updateBalance']); // Assuming you'll add this method
+    Route::get('/api/grn-entry/{code}', [CustomersLoanController::class, 'getGrnEntry']); // NEW: For item code autofill
+    Route::get('/api/all-bill-nos', [CustomersLoanController::class, 'getAllBillNos']); // NEW: For bill no dropdown
+    Route::put('/customers-loans/{id}', [CustomersLoanController::class, 'update']);
 });
 

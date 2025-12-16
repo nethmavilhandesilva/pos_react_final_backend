@@ -13,7 +13,9 @@ class CustomerController extends Controller
 
 public function apiIndex()
 {
-    return response()->json(Customer::all());
+    // Explicitly select the fields needed by the React frontend
+    $customers = Customer::select('id', 'name', 'short_name', 'credit_limit')->get();
+    return response()->json($customers);
 }
 public function index(): JsonResponse
     {
