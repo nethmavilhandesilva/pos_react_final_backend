@@ -17,6 +17,8 @@ use App\Models\Setting;
 use App\Models\CustomersLoan;
 use Illuminate\Http\JsonResponse;
 use App\Models\Commission;
+use App\Mail\DayEndWeightReportMail;
+use Illuminate\Support\Facades\Mail;
 
 class SalesEntryController extends Controller
 {
@@ -856,13 +858,14 @@ public function update(Request $request, Sale $sale)
             'sale' => $sale
         ]);
     }
-    public function processDay(Request $request)
+  public function processDay(Request $request)
 {
-    // 1. Define the date to be recorded in settings 
+    // 1. Setup Initial Variables
+    $recipientEmail = 'nethmavilhan@gmail.com'; 
     $processLogDate = now()->toDateString(); 
 
-    // 2. Get ALL sales records
-    $allSales = Sale::all();
+    // 2. Fetch Sales and Validate
+    $allSales = \App\Models\Sale::all();
     $totalRecordsToMove = $allSales->count();
 
     if ($totalRecordsToMove === 0) {
@@ -872,58 +875,104 @@ public function update(Request $request, Sale $sale)
         ], 404);
     }
 
-    DB::beginTransaction();
+    // 3. Prepare Aggregated Report Data
+    $sales = \App\Models\Sale::selectRaw("
+            item_code,
+            item_name,
+            SUM(packs) AS packs,
+            SUM(weight) AS weight,
+            SUM(total) AS total
+        ")
+        ->groupBy('item_code', 'item_name')
+        ->orderBy('item_name', 'asc')
+        ->get();
+    
+    // Map items to get pack_due from the Item model
+    $sales = $sales->map(function ($sale) {
+        $item = \App\Models\Item::where('no', $sale->item_code)->first(); 
+        $sale->pack_due = $item ? $item->pack_due : 0;
+        return $sale;
+    });
 
+    // Calculate Grand Totals
+    $totals = $sales->reduce(
+        function ($acc, $sale) {
+            $packs = (float) $sale->packs;
+            $weight = (float) $sale->weight;
+            $pack_due = (float) $sale->pack_due;
+            $item_total = (float) $sale->total;
+
+            $pack_due_cost = $packs * $pack_due;
+            $net_total = $item_total - $pack_due_cost;
+
+            $acc['total_weight'] += $weight;
+            $acc['total_net_total'] += $net_total;
+            return $acc;
+        },
+        ['total_weight' => 0.0, 'total_net_total' => 0.0]
+    );
+
+    $reportData = [
+        'sales' => $sales,
+        'processLogDate' => $processLogDate,
+        'totalRecordsMoved' => $totalRecordsToMove,
+        'totals' => $totals,
+    ];
+
+    // 4. Database Operations with Transaction
+    \DB::beginTransaction();
     try {
         $historyData = [];
-        
-        // Get fillable columns for safe transfer
-        $allowedColumns = (new Sale())->getFillable();
+        $allowedColumns = (new \App\Models\Sale())->getFillable();
 
         foreach ($allSales as $sale) {
-            $data = $sale->only($allowedColumns); // Only allowed columns
-            unset($data['id']); // Remove primary key
+            $data = $sale->only($allowedColumns);
+            unset($data['id']); 
             $historyData[] = $data;
         }
 
-        // 3. Bulk insert into history table
-        SalesHistory::insert($historyData);
+        // Move to history table
+        \App\Models\SalesHistory::insert($historyData);
         
-        // 4. Delete all sales records
-        Sale::truncate(); 
+        // IMPORTANT: Use delete() instead of truncate() to avoid breaking the transaction
+        \App\Models\Sale::query()->delete(); 
 
-        // 5. Update or create 'last_day_started_date' in settings
-        $setting = Setting::where('key', 'last_day_started_date')->first();
+        // Update the last processed date in settings
+        \App\Models\Setting::updateOrCreate(
+            ['key' => 'last_day_started_date'],
+            ['value' => $processLogDate]
+        );
 
-        if ($setting) {
-            // Update the value if record exists
-            $setting->update(['value' => $processLogDate]);
-        } else {
-            // Create a new record if none exists
-            Setting::create([
-                'key' => 'last_day_started_date',
-                'value' => $processLogDate
-            ]);
+        \DB::commit(); 
+        \Log::info("Database transaction committed for $processLogDate");
+
+        // 5. Send the Email
+        // We wrap this in a separate try-catch so an email error doesn't undo the DB changes
+        try {
+            \Mail::to($recipientEmail)->send(new \App\Mail\DayEndWeightReportMail($reportData));
+            \Log::info("End-of-day email sent successfully to $recipientEmail");
+        } catch (\Exception $e) {
+            \Log::error("Email delivery failed: " . $e->getMessage());
         }
-
-        DB::commit(); 
 
         return response()->json([
             'success' => true,
-            'message' => "Successfully moved all **$totalRecordsToMove** sales records to history. Last processed date logged as: $processLogDate.",
+            'message' => "Successfully moved all **$totalRecordsToMove** sales records and sent the daily report email.",
             'date' => $processLogDate
         ]);
 
     } catch (\Exception $e) {
-        DB::rollBack();
+        // Only rollback if the transaction is still active
+        if (\DB::transactionLevel() > 0) {
+            \DB::rollBack();
+        }
         \Log::error("Mass Sales Process Failed: " . $e->getMessage());
 
         return response()->json([
             'success' => false,
-            'message' => "Mass day process failed due to a server error. Database rolled back. Error Detail: " . $e->getMessage()
+            'message' => "Mass day process failed. Database rolled back. Error: " . $e->getMessage()
         ], 500);
     }
 }
-
 
 }

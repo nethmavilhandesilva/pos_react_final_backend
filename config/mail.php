@@ -39,13 +39,14 @@ return [
 
         'smtp' => [
             'transport' => 'smtp',
-            'scheme' => env('MAIL_SCHEME'),
-            'url' => env('MAIL_URL'),
-            'host' => env('MAIL_HOST', '127.0.0.1'),
-            'port' => env('MAIL_PORT', 2525),
+            // Removed scheme and url for simplicity since they are often not needed
+            'host' => env('MAIL_HOST'),            // Remove the fallback default
+            'port' => env('MAIL_PORT'),            // Remove the fallback default
             'username' => env('MAIL_USERNAME'),
             'password' => env('MAIL_PASSWORD'),
+            'encryption' => env('MAIL_ENCRYPTION', 'tls'), // Add encryption
             'timeout' => null,
+            // Keep local_domain if needed, or remove
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
         ],
 

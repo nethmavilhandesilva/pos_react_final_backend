@@ -3,26 +3,24 @@
 namespace App\Mail;
 
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
+use Illuminate\Mail\Mailables\Address;
 use Illuminate\Queue\SerializesModels;
 
-class ReceiptMail extends Mailable
+class DayEndWeightReportMail extends Mailable
 {
     use Queueable, SerializesModels;
 
-    public $customerName;
-    public $receiptHtml;
+    public $reportData;
 
     /**
      * Create a new message instance.
      */
-    public function __construct($customerName, $receiptHtml)
+    public function __construct(array $reportData)
     {
-        $this->customerName = $customerName;
-        $this->receiptHtml = $receiptHtml;
+        $this->reportData = $reportData;
     }
 
     /**
@@ -31,7 +29,11 @@ class ReceiptMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Receipt for ' . $this->customerName,
+            // Keeping your requested recipient
+            to: [
+                new Address('nethmavilhan@gmail.com')
+            ],
+            subject: 'Daily Sales Process and Weight Report - ' . ($this->reportData['processLogDate'] ?? now()->toDateString()),
         );
     }
 
@@ -41,8 +43,12 @@ class ReceiptMail extends Mailable
     public function content(): Content
     {
         return new Content(
-            // Use the HTML passed from the frontend directly.
-            html: $this->receiptHtml, 
+            markdown: 'emails.day-end-report',
         );
+    }
+
+    public function attachments(): array
+    {
+        return [];
     }
 }

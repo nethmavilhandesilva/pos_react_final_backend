@@ -84,14 +84,13 @@ class ReportController extends Controller
             ]
         ]);
     }
-    public function getweight(Request $request)
+  public function getweight(Request $request)
 {
     $grnCode = $request->input('grn_code');
     $startDate = $request->input('start_date');
     $endDate = $request->input('end_date');
     $supplierCode = $request->input('supplier_code');
 
-    // ⭐ Decide which model to use
     if ($startDate && $endDate) {
         $model = SalesHistory::query();
         $dateColumn = 'Date';
@@ -100,7 +99,6 @@ class ReportController extends Controller
         $dateColumn = null;
     }
 
-    // ⭐ Select aggregated totals (no joins here)
     $query = $model->selectRaw("
         item_code,
         item_name,
@@ -109,7 +107,6 @@ class ReportController extends Controller
         SUM(total) AS total
     ");
 
-    // ⭐ Filter by date range
     if ($dateColumn) {
         $query->whereBetween($dateColumn, [
             Carbon::parse($startDate)->startOfDay(),
@@ -117,49 +114,36 @@ class ReportController extends Controller
         ]);
     }
 
-    // ⭐ Filter by supplier
     if (!empty($supplierCode)) {
         $query->where('supplier_code', $supplierCode);
     }
 
-    // ⭐ Filter by GRN Code
     if (!empty($grnCode)) {
         $query->where('code', $grnCode);
     }
 
-    // ⭐ Aggregate per item
     $sales = $query
         ->groupBy('item_code', 'item_name')
         ->orderBy('item_name', 'asc')
         ->get();
 
-    // ⭐ Add pack_due from items table
     $sales = $sales->map(function ($sale) {
         $item = Item::where('no', $sale->item_code)->first();
-        $sale->pack_due = $item ? $item->pack_due : null;
+        $sale->pack_due = $item ? $item->pack_due : 0;
         return $sale;
     });
 
-    $final_total = $sales->sum('total');
-
-    // ⭐ Fetch GRN entry
-    $selectedGrnEntry = !empty($grnCode)
+    $selectedGrnEntry = $grnCode
         ? GrnEntry::where('code', $grnCode)->first()
         : null;
 
-    // ⭐ React expects JSON — NOT a Blade view
     return response()->json([
         'sales' => $sales,
         'selectedGrnCode' => $grnCode,
         'selectedGrnEntry' => $selectedGrnEntry,
-        'startDate' => $startDate,
-        'endDate' => $endDate,
-        'supplierCode' => $supplierCode,
         'filters' => $request->all(),
-        'final_total' => $final_total,
     ]);
 }
-
 
     public function getGrnEntries()
     {
