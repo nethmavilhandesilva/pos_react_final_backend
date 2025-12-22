@@ -22,35 +22,54 @@ use Illuminate\Support\Facades\Mail;
 
 class SalesEntryController extends Controller
 {
-    public function index(): JsonResponse
-    {
-        Log::info('--- SalesEntryController@index: Function was called. ---');
-        try {
-            // --- FIX ---
-            // Removed 'grnEntry' because the relationship does not exist in the Sale.php model
-            $sales = Sale::with(['customer'])->get();
-            // --- END FIX ---
+   public function index(Request $request): JsonResponse
+{
+    try {
+        $currentUser = auth()->user();
+        $currentIp = $request->ip();
 
-            $printedSales = $sales->where('bill_printed', 'Y')->values();
-            $unprintedSales = $sales->where('bill_printed', 'N')->values();
+        Log::info('SalesEntryController@index called', [
+            'user_id' => $currentUser?->id,
+            'role' => $currentUser?->role,
+            'ip' => $currentIp,
+        ]);
 
-            Log::info('SalesEntryController@index: Query successful. Found ' . $sales->count() . ' sales.');
+        // Base query
+        $query = Sale::with(['customer']);
 
-            return response()->json([
-                'sales' => $sales,
-                'printed_sales' => $printedSales,
-                'unprinted_sales' => $unprintedSales,
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('SalesEntryController@index: FAILED to fetch sales', [
-                'message' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-            ]);
-            return response()->json(['error' => 'Failed to fetch sales data.'], 500);
+        // 🔐 Apply IP filter ONLY for normal Users
+        if ($currentUser && $currentUser->role === 'User') {
+            $query->where('ip_address', $currentIp);
         }
+
+        $sales = $query->get();
+
+        $printedSales = $sales->where('bill_printed', 'Y')->values();
+        $unprintedSales = $sales->where('bill_printed', 'N')->values();
+
+        Log::info('SalesEntryController@index: Query successful', [
+            'total_sales' => $sales->count(),
+        ]);
+
+        return response()->json([
+            'sales' => $sales,
+            'printed_sales' => $printedSales,
+            'unprinted_sales' => $unprintedSales,
+        ]);
+
+    } catch (\Exception $e) {
+        Log::error('SalesEntryController@index FAILED', [
+            'message' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+        ]);
+
+        return response()->json([
+            'error' => 'Failed to fetch sales data.'
+        ], 500);
     }
+}
+
 
     public function create()
     {
@@ -154,7 +173,7 @@ class SalesEntryController extends Controller
             'itemsWithPackCost'
         ));
     }
-   public function store(Request $request)
+ public function store(Request $request)
 {
     $validated = $request->validate([
         'supplier_code' => 'required|string|max:255',
@@ -175,6 +194,68 @@ class SalesEntryController extends Controller
     try {
         DB::beginTransaction();
 
+        // Get bill_printed value with proper null handling
+        $billPrinted = $validated['bill_printed'] ?? null;
+        
+        // Check if we should look for existing record to update
+        $shouldCheckForUpdate = 
+            ($billPrinted === null || $billPrinted === 'N') &&
+            $validated['price_per_kg'] == 0;
+
+        if ($shouldCheckForUpdate) {
+            // Find existing record with same criteria
+            $existingSale = Sale::where('customer_code', strtoupper($validated['customer_code']))
+                ->where('item_code', $validated['item_code'])
+                ->where('supplier_code', $validated['supplier_code'])
+                ->where(function($query) {
+                    $query->where('bill_printed', 'N')
+                          ->orWhereNull('bill_printed');
+                })
+                ->where('price_per_kg', 0)
+                ->where('Processed', 'N') // Assuming we only update unprocessed records
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            if ($existingSale) {
+                // Calculate new totals by adding previous values to new values
+                $newWeight = $existingSale->weight + $validated['weight'];
+                $newPacks = $existingSale->packs + $validated['packs'];
+                
+                // Recalculate total based on new weight (price_per_kg is 0, so total remains 0)
+                $newTotal = 0;
+                
+                // Recalculate supplier total (also 0 since price_per_kg is 0)
+                $newSupplierTotal = 0;
+                
+                // Update profit (should be 0 since total is 0)
+                $newProfit = 0;
+
+                // Update the existing record
+                $existingSale->update([
+                    'weight' => $newWeight,
+                    'packs' => $newPacks,
+                    'total' => $newTotal,
+                    'SupplierTotal' => $newSupplierTotal,
+                    'profit' => $newProfit,
+                    'given_amount' => $validated['given_amount'] ?? $existingSale->given_amount,
+                    'customer_name' => $validated['customer_name'] ?? $existingSale->customer_name,
+                    'pack_due' => $validated['pack_due'] ?? $existingSale->pack_due,
+                    'bill_no' => $validated['bill_no'] ?? $existingSale->bill_no,
+                    'bill_printed' => $billPrinted ?? $existingSale->bill_printed,
+                    'updated_at' => now(),
+                ]);
+
+                DB::commit();
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Existing record updated successfully',
+                    'data' => $existingSale->fresh()->toArray()
+                ]);
+            }
+        }
+
+        // If no existing record found or conditions not met, proceed with creating new record
         $pricePerKg = $validated['price_per_kg'];
         $commissionAmount = 0.00;
 
@@ -224,20 +305,18 @@ class SalesEntryController extends Controller
         $customerPackLabour = $item->pack_due ?? 0;
 
         // --- CALCULATE SUPPLIER PRICE AND TOTAL ---
-       $supplierPricePerKg = abs($validated['price_per_kg'] - $commissionAmount);
-       $supplierTotal = $validated['weight'] * $supplierPricePerKg;
+        $supplierPricePerKg = abs($validated['price_per_kg'] - $commissionAmount);
+        $supplierTotal = $validated['weight'] * $supplierPricePerKg;
 
         // ⭐ NEW CALCULATION: PROFIT
         // Profit = Customer Total - Supplier Total
         $profit = $validated['total'] - $supplierTotal;
-
 
         // --- OTHER META DATA ---
         $settingDate = Setting::value('value') ?? now()->toDateString();
         $loggedInUserId = auth()->user()->user_id;
         $uniqueCode = $validated['customer_code'] . '-' . $loggedInUserId;
 
-        $billPrintedStatus = $validated['bill_printed'] ?? null;
         $billNo = $validated['bill_no'] ?? null;
 
         // --- CREATE SALE RECORD ---
@@ -278,7 +357,7 @@ class SalesEntryController extends Controller
             'ip_address' => $request->ip(),
             'given_amount' => $validated['given_amount'],
 
-            'bill_printed' => $billPrintedStatus,
+            'bill_printed' => $billPrinted,
             'bill_no' => $billNo,
 
             'commission_amount' => $commissionAmount,
@@ -288,6 +367,7 @@ class SalesEntryController extends Controller
 
         return response()->json([
             'success' => true,
+            'message' => 'New record created successfully',
             'data' => $sale->fresh()->toArray()
         ]);
 
@@ -936,7 +1016,7 @@ public function update(Request $request, Sale $sale)
 
         // 7. Send the Email
         try {
-            \Mail::to($recipientEmail)->send(new \App\Mail\DayEndWeightReportMail($reportData));
+            \Mail::to($recipientEmail)->send(new DayEndWeightReportMail($reportData));
             \Log::info("Full Daily Report Email Sent Successfully.");
         } catch (\Exception $e) {
             \Log::error("Mail Error: " . $e->getMessage());
