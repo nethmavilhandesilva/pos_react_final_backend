@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ReportController2;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\CustomerController;
@@ -101,6 +102,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // GRN REPORT
     Route::get('/grn-codes', [ReportController::class, 'fetchGrnCodes']);
     Route::get('/grn-report', [ReportController::class, 'grnReport2']);
+    Route::get('/financial-report', [ReportController2::class, 'getFinancialData']);
 
 
     // SALES
