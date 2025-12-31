@@ -12,6 +12,7 @@ use App\Http\Controllers\ReportController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\SalesEntryController;
 use App\Http\Controllers\CommissionController;
+use App\Models\Setting;
 
 // ----------------------------------------------------------------------
 // 🚨 PUBLIC ROUTES (No Authentication Required) 🚨
@@ -103,6 +104,22 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/grn-codes', [ReportController::class, 'fetchGrnCodes']);
     Route::get('/grn-report', [ReportController::class, 'grnReport2']);
     Route::get('/financial-report', [ReportController2::class, 'getFinancialData']);
+    // routes/api.php
+Route::get('/settings', function () {
+        // We fetch the first record. 
+        // If you have multiple keys, use: Setting::where('key', 'your_key')->first();
+        $setting = Setting::first();
+
+        if (!$setting) {
+            return response()->json(['value' => 'No Data'], 404);
+        }
+
+        // Return the whole object or just the value column
+        return response()->json([
+            'value' => $setting->value,
+            'company' => $setting->CompanyName, // Optional: if you need it later
+        ]);
+    });
 
 
     // SALES
@@ -147,5 +164,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/api/grn-entry/{code}', [CustomersLoanController::class, 'getGrnEntry']); // NEW: For item code autofill
     Route::get('/api/all-bill-nos', [CustomersLoanController::class, 'getAllBillNos']); // NEW: For bill no dropdown
     Route::put('/customers-loans/{id}', [CustomersLoanController::class, 'update']);
+
+    //loans
+    Route::post('/loan-report-results', [CustomersLoanController::class, 'getLoanReportData']);
 });
 

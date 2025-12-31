@@ -194,16 +194,21 @@ class SalesEntryController extends Controller
     try {
         DB::beginTransaction();
 
-        // Get bill_printed value with proper null handling
         $billPrinted = $validated['bill_printed'] ?? null;
-        
-        // Check if we should look for existing record to update
+
+        // Prepare current breakdown entry
+        $currentEntry = [
+            'time' => now('Asia/Colombo')->format('h:i A'),
+            'weight' => (float)$validated['weight'],
+            'packs' => (int)$validated['packs']
+        ];
+
+        // Check if we should update an existing record
         $shouldCheckForUpdate = 
             ($billPrinted === null || $billPrinted === 'N') &&
             $validated['price_per_kg'] == 0;
 
         if ($shouldCheckForUpdate) {
-            // Find existing record with same criteria
             $existingSale = Sale::where('customer_code', strtoupper($validated['customer_code']))
                 ->where('item_code', $validated['item_code'])
                 ->where('supplier_code', $validated['supplier_code'])
@@ -212,31 +217,36 @@ class SalesEntryController extends Controller
                           ->orWhereNull('bill_printed');
                 })
                 ->where('price_per_kg', 0)
-                ->where('Processed', 'N') // Assuming we only update unprocessed records
+                ->where('Processed', 'N')
                 ->orderBy('created_at', 'desc')
                 ->first();
 
             if ($existingSale) {
-                // Calculate new totals by adding previous values to new values
+                // Update totals
                 $newWeight = $existingSale->weight + $validated['weight'];
                 $newPacks = $existingSale->packs + $validated['packs'];
-                
-                // Recalculate total based on new weight (price_per_kg is 0, so total remains 0)
-                $newTotal = 0;
-                
-                // Recalculate supplier total (also 0 since price_per_kg is 0)
-                $newSupplierTotal = 0;
-                
-                // Update profit (should be 0 since total is 0)
-                $newProfit = 0;
 
-                // Update the existing record
+                // Handle breakdown history
+                $history = $existingSale->breakdown_history;
+                if (is_string($history)) {
+                    $history = json_decode($history, true);
+                }
+                if (!is_array($history)) {
+                    $history = [[
+                        'time' => $existingSale->created_at->format('h:i A'),
+                        'weight' => (float)$existingSale->weight,
+                        'packs' => (int)$existingSale->packs
+                    ]];
+                }
+                $history[] = $currentEntry;
+
                 $existingSale->update([
                     'weight' => $newWeight,
                     'packs' => $newPacks,
-                    'total' => $newTotal,
-                    'SupplierTotal' => $newSupplierTotal,
-                    'profit' => $newProfit,
+                    'total' => 0,
+                    'SupplierTotal' => 0,
+                    'profit' => 0,
+                    'breakdown_history' => $history,
                     'given_amount' => $validated['given_amount'] ?? $existingSale->given_amount,
                     'customer_name' => $validated['customer_name'] ?? $existingSale->customer_name,
                     'pack_due' => $validated['pack_due'] ?? $existingSale->pack_due,
@@ -246,30 +256,23 @@ class SalesEntryController extends Controller
                 ]);
 
                 DB::commit();
-
                 return response()->json([
                     'success' => true,
-                    'message' => 'Existing record updated successfully',
+                    'message' => 'Existing record updated with history breakdown',
                     'data' => $existingSale->fresh()->toArray()
                 ]);
             }
         }
 
-        // If no existing record found or conditions not met, proceed with creating new record
+        // ---------- COMMISSION LOGIC ----------
         $pricePerKg = $validated['price_per_kg'];
         $commissionAmount = 0.00;
 
-        // --------------------------------------
-        // 1. Check Commission by ITEM CODE + PRICE RANGE
-        // --------------------------------------
         $commissionRule = Commission::where('item_code', $validated['item_code'])
             ->where('starting_price', '<=', $pricePerKg)
             ->where('end_price', '>=', $pricePerKg)
             ->first();
 
-        // --------------------------------------
-        // 2. Check Commission by SUPPLIER CODE + PRICE RANGE
-        // --------------------------------------
         if (!$commissionRule) {
             $commissionRule = Commission::where('supplier_code', $validated['supplier_code'])
                 ->where('starting_price', '<=', $pricePerKg)
@@ -277,9 +280,6 @@ class SalesEntryController extends Controller
                 ->first();
         }
 
-        // --------------------------------------
-        // 3. Check GLOBAL (Z) COMMISSION RULES + PRICE RANGE
-        // --------------------------------------
         if (!$commissionRule) {
             $commissionRule = Commission::where('type', 'Z')
                 ->where('starting_price', '<=', $pricePerKg)
@@ -287,45 +287,31 @@ class SalesEntryController extends Controller
                 ->first();
         }
 
-        // Apply commission amount if found
         if ($commissionRule) {
             $commissionAmount = $commissionRule->commission_amount;
         }
 
-        // --- FETCH ITEM PACK COST & PACK LABOUR ---
         $item = Item::where('no', $validated['item_code'])->first();
-
         if (!$item) {
-            return response()->json([
-                'error' => 'Item not found for the given item_code.'
-            ], 422);
+            return response()->json(['error' => 'Item not found.'], 422);
         }
 
         $customerPackCost = $item->pack_cost ?? 0;
         $customerPackLabour = $item->pack_due ?? 0;
 
-        // --- CALCULATE SUPPLIER PRICE AND TOTAL ---
         $supplierPricePerKg = abs($validated['price_per_kg'] - $commissionAmount);
         $supplierTotal = $validated['weight'] * $supplierPricePerKg;
-
-        // ⭐ NEW CALCULATION: PROFIT
-        // Profit = Customer Total - Supplier Total
         $profit = $validated['total'] - $supplierTotal;
 
-        // --- OTHER META DATA ---
         $settingDate = Setting::value('value') ?? now()->toDateString();
         $loggedInUserId = auth()->user()->user_id;
         $uniqueCode = $validated['customer_code'] . '-' . $loggedInUserId;
 
-        $billNo = $validated['bill_no'] ?? null;
-
-        // --- CREATE SALE RECORD ---
+        // ---------- CREATE NEW SALE ----------
         $sale = Sale::create([
             'supplier_code' => $validated['supplier_code'],
             'customer_code' => strtoupper($validated['customer_code']),
             'customer_name' => $validated['customer_name'],
-
-            'code' => $validated['item_code'],
             'item_code' => $validated['item_code'],
             'item_name' => $validated['item_name'],
             'weight' => $validated['weight'],
@@ -333,21 +319,15 @@ class SalesEntryController extends Controller
             'pack_due' => $validated['pack_due'] ?? 0,
             'total' => $validated['total'],
             'packs' => $validated['packs'],
-
-            // CUSTOMER FIELDS
             'CustomerPackCost' => $customerPackCost,
             'CustomerPackLabour' => $customerPackLabour,
-
-            // SUPPLIER FIELDS
             'SupplierWeight' => $validated['weight'],
-            'SupplierPricePerKg' => $supplierPricePerKg, // Use pre-calculated value
-            'SupplierTotal' => $supplierTotal,           // Use pre-calculated value
+            'SupplierPricePerKg' => $supplierPricePerKg,
+            'SupplierTotal' => $supplierTotal,
             'SupplierPackCost' => $customerPackCost,
             'SupplierPackLabour' => $customerPackLabour,
-
-            // ⭐ ADDED PROFIT FIELD
-            'profit' => $profit, 
-
+            'profit' => $profit,
+            'breakdown_history' => [$currentEntry],
             'Processed' => 'N',
             'FirstTimeBillPrintedOn' => null,
             'BillChangedOn' => null,
@@ -356,15 +336,12 @@ class SalesEntryController extends Controller
             'Date' => $settingDate,
             'ip_address' => $request->ip(),
             'given_amount' => $validated['given_amount'],
-
             'bill_printed' => $billPrinted,
-            'bill_no' => $billNo,
-
+            'bill_no' => $validated['bill_no'] ?? null,
             'commission_amount' => $commissionAmount,
         ]);
 
         DB::commit();
-
         return response()->json([
             'success' => true,
             'message' => 'New record created successfully',
@@ -373,8 +350,7 @@ class SalesEntryController extends Controller
 
     } catch (\Exception | \Illuminate\Database\QueryException $e) {
         DB::rollBack();
-        Log::error('Failed to add sales entry: ' . $e->getMessage());
-
+        Log::error('Sales Entry Failed: ' . $e->getMessage());
         return response()->json([
             'error' => 'Failed to add sales entry: ' . $e->getMessage()
         ], 422);

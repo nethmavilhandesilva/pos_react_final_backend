@@ -194,4 +194,16 @@ class ReportController2 extends Controller
             ], 500);
         }
     }
+    // In your Laravel Controller (e.g., SettingController.php)
+public function getValue()
+{
+    // Assuming you want the first record's value
+    $setting = Setting::first();
+    
+    if ($setting) {
+        return response()->json(['value' => $setting->value]);
+    }
+    
+    return response()->json(['value' => ''], 404);
+}
 }

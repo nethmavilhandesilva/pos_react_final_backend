@@ -474,4 +474,51 @@ class CustomersLoanController extends Controller
 
         return response()->json(['message' => 'Record updated successfully!']);
     }
+    public function loanReportResults(Request $request)
+{
+    $query = CustomersLoan::query();
+
+    if ($request->filled('customer_short_name')) {
+        $query->where('customer_short_name', $request->customer_short_name);
+    }
+
+    if ($request->filled('start_date') && $request->filled('end_date')) {
+        $query->whereBetween('Date', [$request->start_date, $request->end_date]);
+    }
+
+    $loans = $query->orderBy('Date', 'asc')->get();
+
+    // Return JSON instead of a View
+    return response()->json([
+        'loans' => $loans,
+        'companyName' => Setting::value('CompanyName') ?? 'Default Company',
+        'settingDate' => \App\Models\Setting::value('value') ?? now()->toDateString()
+    ]);
+}
+public function getLoanReportData(Request $request)
+    {
+        $query = CustomersLoan::query();
+
+        // 1. Filter by Customer
+        if ($request->filled('customer_short_name')) {
+            $query->where('customer_short_name', $request->customer_short_name);
+        }
+
+        // 2. Filter by Date Range
+        if ($request->filled('start_date') && $request->filled('end_date')) {
+            $query->whereBetween('Date', [$request->start_date, $request->end_date]);
+        }
+
+        $loans = $query->orderBy('Date', 'asc')->get();
+
+        // 3. Get Metadata
+        $companyName = Setting::where('key', 'CompanyName')->value('value') ?? 'සමාගමේ නම';
+        $settingDate = Setting::where('key', 'Date')->value('value') ?? now()->toDateString();
+
+        return response()->json([
+            'loans' => $loans,
+            'companyName' => $companyName,
+            'reportDate' => Carbon::parse($settingDate)->format('Y-m-d'),
+        ]);
+    }
 }

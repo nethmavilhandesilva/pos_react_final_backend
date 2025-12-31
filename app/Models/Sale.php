@@ -50,10 +50,14 @@ class Sale extends Model
         'profit',
         'supplier_bill_printed',
         'supplier_bill_no',
+        'breakdown_history',
 
 
 
     ];
+    protected $casts = [
+    'breakdown_history' => 'array',
+     ];
 
     // If you're using timestamps (created_at and updated_at), keep this
     public $timestamps = true;

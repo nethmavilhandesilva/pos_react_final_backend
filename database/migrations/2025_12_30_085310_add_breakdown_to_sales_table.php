@@ -9,13 +9,11 @@ return new class extends Migration
     /**
      * Run the migrations.
      */
-   public function up()
+    public function up()
 {
-    Schema::create('settings', function (Blueprint $table) {
-        $table->id();
-        $table->string('key')->unique();
-        $table->text('value')->nullable();
-        $table->timestamps();
+    Schema::table('sales', function (Blueprint $table) {
+        // Store the history as a JSON column
+        $table->json('breakdown_history')->nullable()->after('packs');
     });
 }
 
@@ -24,6 +22,8 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('settings');
+        Schema::table('sales', function (Blueprint $table) {
+            //
+        });
     }
 };
