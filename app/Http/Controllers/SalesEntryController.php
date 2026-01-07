@@ -17,29 +17,29 @@ use App\Models\Setting;
 use App\Models\CustomersLoan;
 use Illuminate\Http\JsonResponse;
 use App\Models\Commission;
-use App\Mail\DayEndWeightReportMail;
-use Illuminate\Support\Facades\Mail;
-
+/* 
+    SalesEntryController handles CRUD operations for sales entries,
+    including complex logic for commission calculation, price updates,
+    and maintaining sales adjustment history.
+*/
 class SalesEntryController extends Controller
 {
-   public function index(Request $request): JsonResponse
+  public function index(Request $request): JsonResponse
 {
     try {
         $currentUser = auth()->user();
-        $currentIp = $request->ip();
 
         Log::info('SalesEntryController@index called', [
             'user_id' => $currentUser?->id,
             'role' => $currentUser?->role,
-            'ip' => $currentIp,
         ]);
 
         // Base query
         $query = Sale::with(['customer']);
 
-        // 🔐 Apply IP filter ONLY for normal Users
+        // 🔐 Apply UniqueCode filter ONLY for normal Users
         if ($currentUser && $currentUser->role === 'User') {
-            $query->where('ip_address', $currentIp);
+            $query->where('UniqueCode', $currentUser->id);
         }
 
         $sales = $query->get();
@@ -69,7 +69,6 @@ class SalesEntryController extends Controller
         ], 500);
     }
 }
-
 
     public function create()
     {
@@ -914,96 +913,7 @@ public function update(Request $request, Sale $sale)
             'sale' => $sale
         ]);
     }
- public function processDay(Request $request)
-{
-    $recipientEmail = 'nethmavilhan@gmail.com'; 
-    $processLogDate = now()->toDateString(); 
 
-    // 1. Fetch Current Sales
-    $allSales = \App\Models\Sale::all();
-    $totalRecordsToMove = $allSales->count();
 
-    if ($totalRecordsToMove === 0) {
-        return response()->json(['success' => false, 'message' => "Sales table is empty."], 404);
-    }
-
-    // 2. Fetch Adjustments for the day
-    $adjustments = \App\Models\Salesadjustment::whereDate('Date', $processLogDate)
-                    ->orderBy('created_at', 'desc')
-                    ->get();
-
-    // 3. Summarize Sales (For Table 1)
-    $summarizedSales = \App\Models\Sale::selectRaw("
-            item_code, item_name,
-            SUM(packs) AS packs, SUM(weight) AS weight, SUM(total) AS total
-        ")
-        ->groupBy('item_code', 'item_name')
-        ->orderBy('item_name', 'asc')->get();
-    
-    $summarizedSales = $summarizedSales->map(function ($sale) {
-        $item = \App\Models\Item::where('no', $sale->item_code)->first(); 
-        $sale->pack_due = $item ? $item->pack_due : 0;
-        return $sale;
-    });
-
-    // 4. Group Sales by Customer then Bill (For Table 2 - Processed Sales Summary)
-    $groupedSales = $allSales->groupBy('customer_code')->map(function ($customerSales) {
-        return $customerSales->groupBy('bill_no');
-    });
-
-    $totals = $summarizedSales->reduce(function ($acc, $sale) {
-        $acc['total_weight'] += (float) $sale->weight;
-        $acc['total_net_total'] += ((float)$sale->total - ((float)$sale->packs * (float)$sale->pack_due));
-        return $acc;
-    }, ['total_weight' => 0.0, 'total_net_total' => 0.0]);
-
-    // 5. Build Payload
-    $reportData = [
-        'processLogDate' => $processLogDate,
-        'totalRecordsMoved' => $totalRecordsToMove,
-        'sales' => $summarizedSales,        // Table 1
-        'raw_sales' => $allSales,           // Table 2 (Item Details)
-        'grouped_sales' => $groupedSales,   // Table 3 (Processed Summary)
-        'adjustments' => $adjustments,      // Table 4
-        'totals' => $totals,
-    ];
-
-    // 6. Database Operations
-    \DB::beginTransaction();
-    try {
-        $historyData = [];
-        $allowedColumns = (new \App\Models\Sale())->getFillable();
-
-        foreach ($allSales as $sale) {
-            $data = $sale->only($allowedColumns);
-            unset($data['id']); 
-            $historyData[] = $data;
-        }
-
-        \App\Models\SalesHistory::insert($historyData);
-        \App\Models\Sale::query()->delete(); 
-
-        \App\Models\Setting::updateOrCreate(
-            ['key' => 'last_day_started_date'],
-            ['value' => $processLogDate]
-        );
-
-        \DB::commit();
-
-        // 7. Send the Email
-        try {
-            \Mail::to($recipientEmail)->send(new DayEndWeightReportMail($reportData));
-            \Log::info("Full Daily Report Email Sent Successfully.");
-        } catch (\Exception $e) {
-            \Log::error("Mail Error: " . $e->getMessage());
-        }
-
-        return response()->json(['success' => true, 'message' => "Process complete. All reports emailed."]);
-
-    } catch (\Exception $e) {
-        if (\DB::transactionLevel() > 0) \DB::rollBack();
-        return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
-    }
-}
 
 }
