@@ -24,32 +24,37 @@ use App\Models\Commission;
 */
 class SalesEntryController extends Controller
 {
-  public function index(Request $request): JsonResponse
+ public function index(Request $request): JsonResponse
 {
     try {
         $currentUser = auth()->user();
 
         Log::info('SalesEntryController@index called', [
-            'user_id' => $currentUser?->id,
+            'db_id' => $currentUser?->id,
+            'user_id' => $currentUser?->user_id, // This is the important one!
+            'name' => $currentUser?->name,
             'role' => $currentUser?->role,
         ]);
 
         // Base query
         $query = Sale::with(['customer']);
 
-        // 🔐 Apply UniqueCode filter ONLY for normal Users
+        // 🔐 Apply User filter
         if ($currentUser && $currentUser->role === 'User') {
-            $query->where('UniqueCode', $currentUser->id);
+            // Filter by user_id field (which should be 'pos12345')
+            $query->where('UniqueCode', $currentUser->user_id);
         }
 
         $sales = $query->get();
 
-        $printedSales = $sales->where('bill_printed', 'Y')->values();
-        $unprintedSales = $sales->where('bill_printed', 'N')->values();
-
         Log::info('SalesEntryController@index: Query successful', [
             'total_sales' => $sales->count(),
+            'filtered_by' => $currentUser?->role === 'User' ? $currentUser->user_id : 'none',
+            'matching_records_found' => $sales->where('UniqueCode', $currentUser?->user_id)->count(),
         ]);
+
+        $printedSales = $sales->where('bill_printed', 'Y')->values();
+        $unprintedSales = $sales->where('bill_printed', 'N')->values();
 
         return response()->json([
             'sales' => $sales,
@@ -69,7 +74,6 @@ class SalesEntryController extends Controller
         ], 500);
     }
 }
-
     public function create()
     {
         $suppliers = Supplier::all();
@@ -304,7 +308,7 @@ class SalesEntryController extends Controller
 
         $settingDate = Setting::value('value') ?? now()->toDateString();
         $loggedInUserId = auth()->user()->user_id;
-        $uniqueCode = $validated['customer_code'] . '-' . $loggedInUserId;
+        $uniqueCode = $loggedInUserId;
 
         // ---------- CREATE NEW SALE ----------
         $sale = Sale::create([

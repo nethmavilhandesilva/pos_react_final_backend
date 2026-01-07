@@ -24,7 +24,7 @@ class User extends Authenticatable
         'email',
         'password',
         'role',
-        'user_id',
+        'user_id', // This should store 'pos12345'
         'ip_address'
     ];
 
@@ -49,5 +49,27 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+
+    /**
+     * Get the name of the unique identifier for the user.
+     *
+     * @return string
+     */
+    public function getAuthIdentifierName()
+    {
+        // Use 'user_id' field for authentication instead of default 'id'
+        return 'user_id';
+    }
+
+    /**
+     * Get the unique identifier for the user.
+     *
+     * @return mixed
+     */
+    public function getAuthIdentifier()
+    {
+        // Return the user_id value for authentication
+        return $this->attributes['user_id'] ?? $this->attributes['id'];
     }
 }
