@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\DayEndWeightReportMail;
 use App\Models\GrnEntry;
 use App\Models\Supplier;
 use App\Models\Sale;
@@ -917,6 +918,130 @@ public function update(Request $request, Sale $sale)
             'sale' => $sale
         ]);
     }
+      public function processDay(Request $request)
+{
+    $recipientEmail = 'nethmavilhan@gmail.com';
+    $processLogDate = now()->toDateString();
+
+    // 1. Fetch Current Sales
+    $allSales = \App\Models\Sale::all();
+    $totalRecordsToMove = $allSales->count();
+
+    if ($totalRecordsToMove === 0) {
+        return response()->json([
+            'success' => false,
+            'message' => "Sales table is empty."
+        ], 404);
+    }
+
+    // 2. Fetch Adjustments for the day
+    $adjustments = \App\Models\Salesadjustment::whereDate('Date', $processLogDate)
+        ->orderBy('created_at', 'desc')
+        ->get();
+
+    // 3. Summarize Sales (Table 1)
+    $summarizedSales = \App\Models\Sale::selectRaw("
+            item_code, item_name,
+            SUM(packs) AS packs,
+            SUM(weight) AS weight,
+            SUM(total) AS total
+        ")
+        ->groupBy('item_code', 'item_name')
+        ->orderBy('item_name', 'asc')
+        ->get();
+
+    $summarizedSales = $summarizedSales->map(function ($sale) {
+        $item = \App\Models\Item::where('no', $sale->item_code)->first();
+        $sale->pack_due = $item ? $item->pack_due : 0;
+        return $sale;
+    });
+
+    // 4. Group Sales by Customer лаЛћЛџ Bill
+    $groupedSales = $allSales->groupBy('customer_code')->map(function ($customerSales) {
+        return $customerSales->groupBy('bill_no');
+    });
+
+    // Totals
+    $totals = $summarizedSales->reduce(function ($acc, $sale) {
+        $acc['total_weight'] += (float) $sale->weight;
+        $acc['total_net_total'] +=
+            ((float) $sale->total - ((float) $sale->packs * (float) $sale->pack_due));
+        return $acc;
+    }, [
+        'total_weight' => 0.0,
+        'total_net_total' => 0.0
+    ]);
+
+    // 5. Build Email Payload
+    $reportData = [
+        'processLogDate'      => $processLogDate,
+        'totalRecordsMoved'   => $totalRecordsToMove,
+        'sales'               => $summarizedSales,
+        'raw_sales'           => $allSales,
+        'grouped_sales'       => $groupedSales,
+        'adjustments'         => $adjustments,
+        'totals'              => $totals,
+    ];
+
+    // 6. Database Operations
+    \DB::beginTransaction();
+    try {
+        $historyData   = [];
+        $allowedColumns = (new \App\Models\Sale())->getFillable();
+
+        foreach ($allSales as $sale) {
+            $data = $sale->only($allowedColumns);
+            unset($data['id']);
+
+            // лаЛјлЂ FIX: Convert arrays to JSON
+            foreach ($data as $key => $value) {
+                if (is_array($value)) {
+                    $data[$key] = json_encode($value);
+                }
+            }
+
+            $historyData[] = $data;
+        }
+
+        // Insert into history
+        \App\Models\SalesHistory::insert($historyData);
+
+        // Clear current sales
+        \App\Models\Sale::query()->delete();
+
+        // Save last processed day
+        \App\Models\Setting::updateOrCreate(
+            ['key' => 'last_day_started_date'],
+            ['value' => $processLogDate]
+        );
+
+        \DB::commit();
+
+        // 7. Send Email
+        try {
+            \Mail::to($recipientEmail)
+                ->send(new DayEndWeightReportMail($reportData));
+            \Log::info("Full Daily Report Email Sent Successfully.");
+        } catch (\Exception $e) {
+            \Log::error("Mail Error: " . $e->getMessage());
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "Process complete. All reports emailed."
+        ]);
+
+    } catch (\Exception $e) {
+        if (\DB::transactionLevel() > 0) {
+            \DB::rollBack();
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => $e->getMessage()
+        ], 500);
+    }
+}
 
 
 

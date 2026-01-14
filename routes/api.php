@@ -167,5 +167,18 @@ Route::get('/settings', function () {
 
     //loans
     Route::post('/loan-report-results', [CustomersLoanController::class, 'getLoanReportData']);
+    //update given amount
+    Route::get('/sales/customer/given-amount/{customerCode}', function($customerCode) {
+    // Get the latest given_amount for this customer
+    $latestSale = \App\Models\Sale::where('customer_code', $customerCode)
+        ->whereNotNull('given_amount')
+        ->orderBy('updated_at', 'desc')
+        ->first();
+    
+    return response()->json([
+        'success' => true,
+        'given_amount' => $latestSale ? $latestSale->given_amount : null
+    ]);
+});
 });
 

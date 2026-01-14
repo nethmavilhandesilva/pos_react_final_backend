@@ -226,7 +226,7 @@ class CustomersLoanController extends Controller
         }
 
 
-        return response()->json(['message' => 'Loan and income/expense record created successfully!'], 201);
+       return response()->json([], 201);
     }
 
 
@@ -317,7 +317,8 @@ class CustomersLoanController extends Controller
             $loan->save();
         }
 
-        return response()->json(['message' => 'Record updated successfully!']);
+       return response()->json([], 201);
+
     }
 
 
@@ -472,7 +473,7 @@ class CustomersLoanController extends Controller
             $loan->save();
         }
 
-        return response()->json(['message' => 'Record updated successfully!']);
+        return response()->json([], 201);
     }
     public function loanReportResults(Request $request)
 {
