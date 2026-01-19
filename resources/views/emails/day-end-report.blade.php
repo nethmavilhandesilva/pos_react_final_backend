@@ -7,8 +7,10 @@
     <strong>Date Processed:</strong> {{ $reportData['processLogDate'] }}<br>
     මෙම ලේඛනය සාරාංශ කරන්නේ දෛනික විකුණුම් මෙහෙයුම්, තොග චලන, සහ පද්ධතිය තුළ වාර්තා කරන ලද සංශෝධන ලොග් සටහන්.
 </div>
-## **බර අනුව වාර්තාව**
-<div style="font-size: 13px; color:#6c6c6c; margin-bottom:5px;">සියල්ල සඳහා දෛනික එකතුව.</div>
+
+---
+
+## **1. බර අනුව වාර්තාව (Summary by Weight)**
 
 <x-mail::table>
 | අයිතමය | බර | මලු | මලු කුලිය | එකතුව |
@@ -22,12 +24,11 @@
 
 ---
 
-## **2. විකුණුම් සාරාංශය**
-<div style="font-size: 13px; color:#6c6c6c; margin-bottom:5px;">ගනුදෙනුකරු සහ බිල් අංකය අනුව කණ්ඩායම්ගත කළ විකුණුම්.</div>
+## **2. විකුණුම් සාරාංශය (Customer → Bill → Items)**
 
 @foreach ($reportData['grouped_sales'] as $customerCode => $bills)
 
-<div style="background:#f5f5f5; border-left:4px solid #0a6b28; padding:10px; margin-bottom:8px; font-size:14px;">
+<div style="background:#f5f5f5; border-left:4px solid #0a6b28; padding:10px; margin-bottom:8px;">
     <strong>පාරිභෝගික:</strong> {{ $customerCode }}
 </div>
 
@@ -51,8 +52,7 @@
 
 ---
 
-## **3.අයිතම මට්ටමේ සවිස්තර ගත වාර්තා**
-<div style="font-size: 13px; color:#6c6c6c; margin-bottom:5px;">Complete log of all sales entries captured during the process.</div>
+## **3. අයිතම මට්ටමේ සවිස්තර ගත වාර්තා (Raw Sales Log)**
 
 <x-mail::table>
 | බිල් අංකය | මලු | බර | මිල | එකතුව | පාරිභෝගික | කේතය |
@@ -64,8 +64,7 @@
 
 ---
 
-## **4.සංශෝධන වාර්තා**
-<div style="font-size: 13px; color:#6c6c6c; margin-bottom:5px;">Corrections or modifications applied during review.</div>
+## **4. සංශෝධන වාර්තා (Adjustment Logs)**
 
 <x-mail::table>
 | කේතය | අයිතමය | බර | මිල | මලු | ස්ථානය | වේලාපත්‍රය |
@@ -81,6 +80,32 @@ $statusColor = $adj->type === 'original' ? '#0a6b28' : ($adj->type === 'updated'
 |  |  | *සංශෝධන වාර්තා නොවේ* |  |  |  |  |
 @endif
 </x-mail::table>
+
+---
+
+# **5. සැපයුම්කරු අනුව වාර්තාව (Supplier Report)**
+
+@foreach ($reportData['supplier_report'] as $supplierCode => $records)
+
+<div style="background:#f2f2f2; border-left:4px solid #004d00; margin:10px 0; padding:10px;">
+    <strong>සැපයුම්කරු: {{ $supplierCode }}</strong>
+</div>
+
+<x-mail::table>
+| දිනය | අයිතම කේතය | අයිතමය | ගනුදෙනුකරු | බර | මිල | එකතුව | ලාභ |
+|:--- |:--- |:--- |:--- |:---: |:---: |:---: |:---: |
+@foreach ($records as $row)
+| {{ $row->Date }} | {{ $row->item_code }} | {{ $row->item_name }} | {{ $row->customer_code }} | {{ $row->SupplierWeight }} | {{ $row->SupplierPricePerKg }} | {{ number_format($row->SupplierTotal, 2) }} | {{ number_format($row->profit, 2) }} |
+@endforeach
+</x-mail::table>
+
+<div style="text-align:right; margin-bottom:20px;">
+    <strong>සැපයුම්කරුගේ උප එකතුව:</strong>
+    {{ number_format($records->sum('SupplierTotal'), 2) }}
+</div>
+
+@endforeach
+
 <br><br>
 
 Regards,<br>

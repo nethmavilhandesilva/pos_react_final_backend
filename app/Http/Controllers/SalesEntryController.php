@@ -939,7 +939,7 @@ public function update(Request $request, Sale $sale)
         ->orderBy('created_at', 'desc')
         ->get();
 
-    // 3. Summarize Sales (Table 1)
+    // 3. Summarize Sales
     $summarizedSales = \App\Models\Sale::selectRaw("
             item_code, item_name,
             SUM(packs) AS packs,
@@ -956,10 +956,30 @@ public function update(Request $request, Sale $sale)
         return $sale;
     });
 
-    // 4. Group Sales by Customer лаЛћЛџ Bill
+    // 4. Group Sales by Customer => Bill
     $groupedSales = $allSales->groupBy('customer_code')->map(function ($customerSales) {
         return $customerSales->groupBy('bill_no');
     });
+
+    // 5. NEW: Supplier Report
+    $supplierReport = \App\Models\Sale::select([
+        'supplier_code',
+        'customer_code',
+        'item_code',
+        'item_name',
+        'SupplierWeight',
+        'SupplierPricePerKg',
+        'SupplierTotal',
+        'SupplierPackCost',
+        'SupplierPackLabour',
+        'profit',
+        'supplier_bill_printed',
+        'supplier_bill_no',
+        'Date'
+    ])
+    ->orderBy('Date', 'desc')
+    ->get()
+    ->groupBy('supplier_code');
 
     // Totals
     $totals = $summarizedSales->reduce(function ($acc, $sale) {
@@ -972,7 +992,7 @@ public function update(Request $request, Sale $sale)
         'total_net_total' => 0.0
     ]);
 
-    // 5. Build Email Payload
+    // Email Payload
     $reportData = [
         'processLogDate'      => $processLogDate,
         'totalRecordsMoved'   => $totalRecordsToMove,
@@ -980,36 +1000,30 @@ public function update(Request $request, Sale $sale)
         'raw_sales'           => $allSales,
         'grouped_sales'       => $groupedSales,
         'adjustments'         => $adjustments,
+        'supplier_report'     => $supplierReport, // ADDED
         'totals'              => $totals,
     ];
 
-    // 6. Database Operations
     \DB::beginTransaction();
     try {
-        $historyData   = [];
+        $historyData = [];
         $allowedColumns = (new \App\Models\Sale())->getFillable();
 
         foreach ($allSales as $sale) {
             $data = $sale->only($allowedColumns);
             unset($data['id']);
 
-            // лаЛјлЂ FIX: Convert arrays to JSON
             foreach ($data as $key => $value) {
                 if (is_array($value)) {
                     $data[$key] = json_encode($value);
                 }
             }
-
             $historyData[] = $data;
         }
 
-        // Insert into history
         \App\Models\SalesHistory::insert($historyData);
-
-        // Clear current sales
         \App\Models\Sale::query()->delete();
 
-        // Save last processed day
         \App\Models\Setting::updateOrCreate(
             ['key' => 'last_day_started_date'],
             ['value' => $processLogDate]
@@ -1017,11 +1031,10 @@ public function update(Request $request, Sale $sale)
 
         \DB::commit();
 
-        // 7. Send Email
+        // Send Email
         try {
             \Mail::to($recipientEmail)
                 ->send(new DayEndWeightReportMail($reportData));
-            \Log::info("Full Daily Report Email Sent Successfully.");
         } catch (\Exception $e) {
             \Log::error("Mail Error: " . $e->getMessage());
         }
@@ -1032,16 +1045,14 @@ public function update(Request $request, Sale $sale)
         ]);
 
     } catch (\Exception $e) {
-        if (\DB::transactionLevel() > 0) {
-            \DB::rollBack();
-        }
-
+        \DB::rollBack();
         return response()->json([
             'success' => false,
             'message' => $e->getMessage()
         ], 500);
     }
 }
+
 
 
 

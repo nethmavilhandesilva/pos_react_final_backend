@@ -1611,4 +1611,27 @@ public function grnReport2(Request $request)
 
         return back()->with('success', 'Report generated and emails sent successfully!');
     }
+   public function getSupplierReport()
+{
+    $reportData = Sale::select([
+        'supplier_code',
+        'customer_code',
+        'item_code',
+        'item_name',
+        'SupplierWeight',
+        'SupplierPricePerKg',
+        'SupplierTotal',
+        'SupplierPackCost',
+        'SupplierPackLabour',
+        'profit',
+        'supplier_bill_printed',
+        'supplier_bill_no',
+        'Date'
+    ])
+    ->orderBy('Date', 'desc')
+    ->get()
+    ->groupBy('supplier_code'); // This groups the data by supplier_code
+
+    return response()->json($reportData);
+}
 }

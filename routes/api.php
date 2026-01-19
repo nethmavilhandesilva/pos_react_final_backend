@@ -180,5 +180,6 @@ Route::get('/settings', function () {
         'given_amount' => $latestSale ? $latestSale->given_amount : null
     ]);
 });
+Route::middleware('auth:sanctum')->get('/supplier-report', [ReportController::class, 'getSupplierReport']);
 });
 

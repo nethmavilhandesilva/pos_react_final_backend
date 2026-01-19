@@ -29,9 +29,9 @@ class DayEndWeightReportMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            // Keeping your requested recipient
             to: [
-                new Address('nethmavilhan@gmail.com')
+                new Address('nethmavilhan@gmail.com'),
+                new Address('thrcorner@gmail.com') // Added second email recipient
             ],
             subject: 'Daily Sales Process and Weight Report - ' . ($this->reportData['processLogDate'] ?? now()->toDateString()),
         );
@@ -44,6 +44,9 @@ class DayEndWeightReportMail extends Mailable
     {
         return new Content(
             markdown: 'emails.day-end-report',
+            with: [
+                'reportData' => $this->reportData
+            ]
         );
     }
 
