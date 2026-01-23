@@ -84,7 +84,7 @@ class ReportController extends Controller
             ]
         ]);
     }
-  public function getweight(Request $request)
+ public function getweight(Request $request)
 {
     $grnCode = $request->input('grn_code');
     $startDate = $request->input('start_date');
@@ -127,9 +127,10 @@ class ReportController extends Controller
         ->orderBy('item_name', 'asc')
         ->get();
 
+    // UPDATED: Fetching pack_cost instead of pack_due
     $sales = $sales->map(function ($sale) {
         $item = Item::where('no', $sale->item_code)->first();
-        $sale->pack_due = $item ? $item->pack_due : 0;
+        $sale->pack_cost = $item ? $item->pack_cost : 0; 
         return $sale;
     });
 
@@ -144,7 +145,6 @@ class ReportController extends Controller
         'filters' => $request->all(),
     ]);
 }
-
     public function getGrnEntries()
     {
         $entries = GrnEntry::select('code', 'supplier_code', 'item_code', 'item_name', 'packs', 'grn_no', 'txn_date')
@@ -1626,6 +1626,7 @@ public function grnReport2(Request $request)
         'profit',
         'supplier_bill_printed',
         'supplier_bill_no',
+        'CustomerPackCost',
         'Date'
     ])
     ->orderBy('Date', 'desc')

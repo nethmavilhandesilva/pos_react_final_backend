@@ -51,6 +51,7 @@ class Sale extends Model
         'supplier_bill_printed',
         'supplier_bill_no',
         'breakdown_history',
+        'bag_real_weight',
 
 
 

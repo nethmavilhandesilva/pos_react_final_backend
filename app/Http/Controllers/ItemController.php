@@ -16,10 +16,11 @@ class ItemController extends Controller
     public function store(Request $request)
     {
         $request->validate([
-            'no'        => 'required',
-            'type'      => 'required',
-            'pack_cost' => 'required|numeric',
-            'pack_due'  => 'required|numeric',
+            'no'             => 'required',
+            'type'           => 'required',
+            'pack_cost'      => 'required|numeric',
+            'pack_due'       => 'required|numeric',
+            'bag_real_price' => 'required|numeric', // Added validation
         ]);
 
         $data = $request->all();
@@ -41,10 +42,11 @@ class ItemController extends Controller
     public function update(Request $request, Item $item)
     {
         $request->validate([
-            'no' => 'required',
-            'type' => 'required',
-            'pack_cost' => 'required|numeric',
-            'pack_due' => 'required|numeric',
+            'no'             => 'required',
+            'type'           => 'required',
+            'pack_cost'      => 'required|numeric',
+            'pack_due'       => 'required|numeric',
+            'bag_real_price' => 'required|numeric', // Added validation
         ]);
 
         $data = $request->all();

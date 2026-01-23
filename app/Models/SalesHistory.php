@@ -51,6 +51,7 @@ class SalesHistory extends Model
         'profit',
         'supplier_bill_printed',
         'supplier_bill_no',
+        'bag_real_weight',
 
 
 

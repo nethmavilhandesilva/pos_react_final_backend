@@ -16,7 +16,7 @@
 | අයිතමය | බර | මලු | මලු කුලිය | එකතුව |
 |:--- |:---: |:---: |:---: |:---: |
 @foreach ($reportData['sales'] as $sale)
-| **{{ $sale->item_name }}** | {{ number_format($sale->weight, 2) }} | {{ $sale->packs }} | {{ number_format($sale->packs * $sale->pack_due, 2) }} | **{{ number_format($sale->total - ($sale->packs * $sale->pack_due), 2) }}** |
+| **{{ $sale->item_name }}** | {{ number_format($sale->weight, 2) }} | {{ $sale->packs }} | {{ number_format($sale->packs * $sale->pack_cost, 2) }} | **{{ number_format($sale->total - ($sale->packs * $sale->pack_cost), 2) }}** |
 @endforeach
 | --- | --- | --- | --- | --- |
 | **මුළු එකතුව** | **{{ number_format($reportData['totals']['total_weight'], 2) }}** |  |  | **{{ number_format($reportData['totals']['total_net_total'], 2) }}** |

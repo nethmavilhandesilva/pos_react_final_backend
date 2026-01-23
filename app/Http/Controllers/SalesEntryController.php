@@ -177,7 +177,7 @@ class SalesEntryController extends Controller
             'itemsWithPackCost'
         ));
     }
- public function store(Request $request)
+public function store(Request $request)
 {
     $validated = $request->validate([
         'supplier_code' => 'required|string|max:255',
@@ -198,27 +198,45 @@ class SalesEntryController extends Controller
     try {
         DB::beginTransaction();
 
-        $billPrinted = $validated['bill_printed'] ?? null;
+        // 1. Fetch Item details
+        $item = Item::where('no', $validated['item_code'])->first();
+        if (!$item) {
+            return response()->json(['error' => 'Item not found.'], 422);
+        }
 
-        // Prepare current breakdown entry
+        // --- CALCULATION LOGIC ---
+        $bagWeightPerUnit = (float)($item->bag_real_price ?? 0); 
+        $numPacks = (int)$validated['packs'];
+        $pricePerKg = (float)$validated['price_per_kg'];
+        
+        // Total Bag Weight to subtract
+        $totalBagWeight = $bagWeightPerUnit * $numPacks;
+        
+        // Net Weight for this specific entry
+        $incomingNetWeight = (float)$validated['weight'] - $totalBagWeight;
+
+        // Recalculate Total based on Net Weight (Price * Net Weight)
+        // If price is 0 (unpriced items), total remains 0.
+        $recalculatedIncomingTotal = $incomingNetWeight * $pricePerKg;
+        // -------------------------
+
+        $billPrinted = $validated['bill_printed'] ?? null;
         $currentEntry = [
             'time' => now('Asia/Colombo')->format('h:i A'),
-            'weight' => (float)$validated['weight'],
-            'packs' => (int)$validated['packs']
+            'weight' => (float)$validated['weight'], 
+            'packs' => $numPacks
         ];
 
-        // Check if we should update an existing record
         $shouldCheckForUpdate = 
             ($billPrinted === null || $billPrinted === 'N') &&
-            $validated['price_per_kg'] == 0;
+            $pricePerKg == 0;
 
         if ($shouldCheckForUpdate) {
             $existingSale = Sale::where('customer_code', strtoupper($validated['customer_code']))
                 ->where('item_code', $validated['item_code'])
                 ->where('supplier_code', $validated['supplier_code'])
                 ->where(function($query) {
-                    $query->where('bill_printed', 'N')
-                          ->orWhereNull('bill_printed');
+                    $query->where('bill_printed', 'N')->orWhereNull('bill_printed');
                 })
                 ->where('price_per_kg', 0)
                 ->where('Processed', 'N')
@@ -226,90 +244,60 @@ class SalesEntryController extends Controller
                 ->first();
 
             if ($existingSale) {
-                // Update totals
-                $newWeight = $existingSale->weight + $validated['weight'];
-                $newPacks = $existingSale->packs + $validated['packs'];
+                $newWeight = $existingSale->weight + $incomingNetWeight;
+                $newPacks = $existingSale->packs + $numPacks;
+                
+                // Since price_per_kg is 0 for these updates, total remains 0
+                $newTotal = $newWeight * 0; 
 
-                // Handle breakdown history
                 $history = $existingSale->breakdown_history;
-                if (is_string($history)) {
-                    $history = json_decode($history, true);
-                }
+                if (is_string($history)) { $history = json_decode($history, true); }
                 if (!is_array($history)) {
-                    $history = [[
-                        'time' => $existingSale->created_at->format('h:i A'),
-                        'weight' => (float)$existingSale->weight,
-                        'packs' => (int)$existingSale->packs
-                    ]];
+                    $history = [['time' => $existingSale->created_at->format('h:i A'), 'weight' => (float)$existingSale->weight, 'packs' => (int)$existingSale->packs]];
                 }
                 $history[] = $currentEntry;
 
                 $existingSale->update([
                     'weight' => $newWeight,
                     'packs' => $newPacks,
-                    'total' => 0,
+                    'total' => $newTotal, // Updated Total
                     'SupplierTotal' => 0,
                     'profit' => 0,
                     'breakdown_history' => $history,
-                    'given_amount' => $validated['given_amount'] ?? $existingSale->given_amount,
-                    'customer_name' => $validated['customer_name'] ?? $existingSale->customer_name,
-                    'pack_due' => $validated['pack_due'] ?? $existingSale->pack_due,
-                    'bill_no' => $validated['bill_no'] ?? $existingSale->bill_no,
-                    'bill_printed' => $billPrinted ?? $existingSale->bill_printed,
+                    'bag_real_weight' => $bagWeightPerUnit,
                     'updated_at' => now(),
                 ]);
 
                 DB::commit();
-                return response()->json([
-                    'success' => true,
-                    'message' => 'Existing record updated with history breakdown',
-                    'data' => $existingSale->fresh()->toArray()
-                ]);
+                return response()->json(['success' => true, 'message' => 'Existing record updated', 'data' => $existingSale->fresh()]);
             }
         }
 
-        // ---------- COMMISSION LOGIC ----------
-        $pricePerKg = $validated['price_per_kg'];
+        // ---------- COMMISSION & PROFIT LOGIC ----------
         $commissionAmount = 0.00;
-
         $commissionRule = Commission::where('item_code', $validated['item_code'])
             ->where('starting_price', '<=', $pricePerKg)
             ->where('end_price', '>=', $pricePerKg)
             ->first();
 
         if (!$commissionRule) {
-            $commissionRule = Commission::where('supplier_code', $validated['supplier_code'])
-                ->where('starting_price', '<=', $pricePerKg)
-                ->where('end_price', '>=', $pricePerKg)
-                ->first();
+            $commissionRule = Commission::where('supplier_code', $validated['supplier_code'])->where('starting_price', '<=', $pricePerKg)->where('end_price', '>=', $pricePerKg)->first();
         }
-
         if (!$commissionRule) {
-            $commissionRule = Commission::where('type', 'Z')
-                ->where('starting_price', '<=', $pricePerKg)
-                ->where('end_price', '>=', $pricePerKg)
-                ->first();
+            $commissionRule = Commission::where('type', 'Z')->where('starting_price', '<=', $pricePerKg)->where('end_price', '>=', $pricePerKg)->first();
         }
-
-        if ($commissionRule) {
-            $commissionAmount = $commissionRule->commission_amount;
-        }
-
-        $item = Item::where('no', $validated['item_code'])->first();
-        if (!$item) {
-            return response()->json(['error' => 'Item not found.'], 422);
-        }
+        if ($commissionRule) { $commissionAmount = $commissionRule->commission_amount; }
 
         $customerPackCost = $item->pack_cost ?? 0;
         $customerPackLabour = $item->pack_due ?? 0;
 
-        $supplierPricePerKg = abs($validated['price_per_kg'] - $commissionAmount);
-        $supplierTotal = $validated['weight'] * $supplierPricePerKg;
-        $profit = $validated['total'] - $supplierTotal;
+        $supplierPricePerKg = abs($pricePerKg - $commissionAmount);
+        
+        // Final calculations for NEW sale
+        $supplierTotal = $incomingNetWeight * $supplierPricePerKg;
+        $profit = $recalculatedIncomingTotal - $supplierTotal;
 
         $settingDate = Setting::value('value') ?? now()->toDateString();
-        $loggedInUserId = auth()->user()->user_id;
-        $uniqueCode = $loggedInUserId;
 
         // ---------- CREATE NEW SALE ----------
         $sale = Sale::create([
@@ -318,14 +306,14 @@ class SalesEntryController extends Controller
             'customer_name' => $validated['customer_name'],
             'item_code' => $validated['item_code'],
             'item_name' => $validated['item_name'],
-            'weight' => $validated['weight'],
-            'price_per_kg' => $validated['price_per_kg'],
+            'weight' => $incomingNetWeight, 
+            'price_per_kg' => $pricePerKg,
             'pack_due' => $validated['pack_due'] ?? 0,
-            'total' => $validated['total'],
-            'packs' => $validated['packs'],
+            'total' => $recalculatedIncomingTotal, // RECACLULATED TOTAL HERE
+            'packs' => $numPacks,
             'CustomerPackCost' => $customerPackCost,
             'CustomerPackLabour' => $customerPackLabour,
-            'SupplierWeight' => $validated['weight'],
+            'SupplierWeight' => $incomingNetWeight,
             'SupplierPricePerKg' => $supplierPricePerKg,
             'SupplierTotal' => $supplierTotal,
             'SupplierPackCost' => $customerPackCost,
@@ -333,34 +321,26 @@ class SalesEntryController extends Controller
             'profit' => $profit,
             'breakdown_history' => [$currentEntry],
             'Processed' => 'N',
-            'FirstTimeBillPrintedOn' => null,
-            'BillChangedOn' => null,
             'CustomerBillEnteredOn' => now(),
-            'UniqueCode' => $uniqueCode,
+            'UniqueCode' => auth()->user()->user_id,
             'Date' => $settingDate,
             'ip_address' => $request->ip(),
             'given_amount' => $validated['given_amount'],
             'bill_printed' => $billPrinted,
             'bill_no' => $validated['bill_no'] ?? null,
             'commission_amount' => $commissionAmount,
+            'bag_real_weight' => $bagWeightPerUnit, 
         ]);
 
         DB::commit();
-        return response()->json([
-            'success' => true,
-            'message' => 'New record created successfully',
-            'data' => $sale->fresh()->toArray()
-        ]);
+        return response()->json(['success' => true, 'message' => 'New record created with updated total', 'data' => $sale->fresh()]);
 
-    } catch (\Exception | \Illuminate\Database\QueryException $e) {
+    } catch (\Exception $e) {
         DB::rollBack();
         Log::error('Sales Entry Failed: ' . $e->getMessage());
-        return response()->json([
-            'error' => 'Failed to add sales entry: ' . $e->getMessage()
-        ], 422);
+        return response()->json(['error' => 'Failed: ' . $e->getMessage()], 422);
     }
 }
-
     public function markAllAsProcessed(Request $request)
     {
         try {
@@ -705,70 +685,68 @@ public function update(Request $request, Sale $sale)
     }
 }
 
-    public function destroy(Sale $sale)
-    {
-        try {
-            // Get the setting date value
-            $settingDate = Setting::value('value');
-            $formattedDate = Carbon::parse($settingDate)->format('Y-m-d');
+   public function destroy(Sale $sale)
+{
+    try {
+        // ✅ Get setting date safely
+        $settingDate = Setting::value('value') ?? now();
+        $formattedDate = Carbon::parse($settingDate)->format('Y-m-d');
 
-            if ($sale->bill_printed === 'Y') {
-                // Always create an "original" record
-                Salesadjustment::create([
-                    'customer_code' => $sale->customer_code,
-                    'supplier_code' => $sale->supplier_code,
-                    'code' => $sale->code,
-                    'item_code' => $sale->item_code,
-                    'item_name' => $sale->item_name,
-                    'weight' => $sale->weight,
-                    'price_per_kg' => $sale->price_per_kg,
-                    'total' => $sale->total,
-                    'packs' => $sale->packs,
-                    'bill_no' => $sale->bill_no,
-                    'type' => 'original',
-                    'original_created_at' => Carbon::parse($sale->Date)
-                        ->setTimeFrom(Carbon::parse($sale->created_at))
-                        ->format('Y-m-d H:i:s'),
+        if ($sale->bill_printed === 'Y') {
 
-                    'Date' => $formattedDate, // ✅ store setting date
-                ]);
+            // ✅ Common adjustment data
+            $adjustmentData = [
+                'customer_code'       => $sale->customer_code,
+                'supplier_code'       => $sale->supplier_code,
+                'code'                => $sale->item_code,
+                'item_code'           => $sale->item_code,
+                'item_name'           => $sale->item_name,
+                'weight'              => $sale->weight,
+                'price_per_kg'        => $sale->price_per_kg,
+                'total'               => $sale->total,
+                'packs'               => $sale->packs,
+                'bill_no'             => $sale->bill_no,
+                'original_created_at' => $sale->created_at, // ✅ SAFE
+                'Date'                => $formattedDate,     // ✅ Setting date
+            ];
 
-                // Always create a "deleted" record
-                Salesadjustment::create([
-                    'customer_code' => $sale->customer_code,
-                    'supplier_code' => $sale->supplier_code,
-                    'code' => $sale->code,
-                    'item_code' => $sale->item_code,
-                    'item_name' => $sale->item_name,
-                    'weight' => $sale->weight,
-                    'price_per_kg' => $sale->price_per_kg,
-                    'total' => $sale->total,
-                    'packs' => $sale->packs,
-                    'bill_no' => $sale->bill_no,
-                    'type' => 'deleted',
-                    'original_created_at' => $sale->created_at,
-                    'Date' => $formattedDate, // ✅ store setting date
-                ]);
-            }
+            // ✅ Original record
+            Salesadjustment::create(
+                $adjustmentData + ['type' => 'original']
+            );
 
-            // Delete and update GRN stock
-            $saleCode = $sale->code;
-            $sale->delete();
-            $this->updateGrnRemainingStock($saleCode);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Sales record deleted successfully.'
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('Error deleting sale: ' . $e->getMessage());
-            return response()->json([
-                'success' => false,
-                'message' => 'An error occurred while deleting the sale.'
-            ], 500);
+            // ✅ Deleted record
+            Salesadjustment::create(
+                $adjustmentData + ['type' => 'deleted']
+            );
         }
+
+        // ✅ Delete sale and update GRN stock
+        $saleCode = $sale->code;
+        $sale->delete();
+        $this->updateGrnRemainingStock($saleCode);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Sales record deleted successfully.'
+        ]);
+
+    } catch (\Exception $e) {
+
+        // ✅ Helpful error logging
+        Log::error('Error deleting sale', [
+            'sale_id' => $sale->id ?? null,
+            'error'   => $e->getMessage(),
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'An error occurred while deleting the sale.',
+            'error'   => $e->getMessage(), // remove in production if needed
+        ], 500);
     }
+}
+
 
     public function updateGrnRemainingStock(): void
     {
@@ -918,12 +896,18 @@ public function update(Request $request, Sale $sale)
             'sale' => $sale
         ]);
     }
-      public function processDay(Request $request)
+   public function processDay(Request $request)
 {
     $recipientEmail = 'nethmavilhan@gmail.com';
-    $processLogDate = now()->toDateString();
 
-    // 1. Fetch Current Sales
+    // ✅ Use selected date from frontend
+    $processLogDate = $request->input('date') ?? now()->toDateString();
+
+    // ✅ Get last stored date from settings.value (ONLY for adjustments)
+    $lastSetting = \App\Models\Setting::where('key', 'last_day_started_date')->first();
+    $adjustmentDate = $lastSetting ? $lastSetting->value : $processLogDate;
+
+    // 1️⃣ Fetch Current Sales
     $allSales = \App\Models\Sale::all();
     $totalRecordsToMove = $allSales->count();
 
@@ -934,34 +918,35 @@ public function update(Request $request, Sale $sale)
         ], 404);
     }
 
-    // 2. Fetch Adjustments for the day
-    $adjustments = \App\Models\Salesadjustment::whereDate('Date', $processLogDate)
+    // 2️⃣ Fetch Adjustments using PREVIOUS stored date
+    $adjustments = \App\Models\Salesadjustment::whereDate('Date', $adjustmentDate)
         ->orderBy('created_at', 'desc')
         ->get();
 
-    // 3. Summarize Sales
+    // 3️⃣ Summarize Sales
     $summarizedSales = \App\Models\Sale::selectRaw("
-            item_code, item_name,
-            SUM(packs) AS packs,
-            SUM(weight) AS weight,
-            SUM(total) AS total
-        ")
-        ->groupBy('item_code', 'item_name')
-        ->orderBy('item_name', 'asc')
-        ->get();
+        item_code, item_name,
+        SUM(packs) AS packs,
+        SUM(weight) AS weight,
+        SUM(total) AS total
+    ")
+    ->groupBy('item_code', 'item_name')
+    ->orderBy('item_name', 'asc')
+    ->get();
 
+    // Add pack_due
     $summarizedSales = $summarizedSales->map(function ($sale) {
         $item = \App\Models\Item::where('no', $sale->item_code)->first();
         $sale->pack_due = $item ? $item->pack_due : 0;
         return $sale;
     });
 
-    // 4. Group Sales by Customer => Bill
+    // 4️⃣ Group Sales by Customer → Bill
     $groupedSales = $allSales->groupBy('customer_code')->map(function ($customerSales) {
         return $customerSales->groupBy('bill_no');
     });
 
-    // 5. NEW: Supplier Report
+    // 5️⃣ Supplier Report
     $supplierReport = \App\Models\Sale::select([
         'supplier_code',
         'customer_code',
@@ -984,46 +969,52 @@ public function update(Request $request, Sale $sale)
     // Totals
     $totals = $summarizedSales->reduce(function ($acc, $sale) {
         $acc['total_weight'] += (float) $sale->weight;
-        $acc['total_net_total'] +=
-            ((float) $sale->total - ((float) $sale->packs * (float) $sale->pack_due));
+        $acc['total_net_total'] += ((float) $sale->total - ((float) $sale->packs * (float) $sale->pack_due));
         return $acc;
     }, [
         'total_weight' => 0.0,
         'total_net_total' => 0.0
     ]);
 
-    // Email Payload
+    // Email Data
     $reportData = [
-        'processLogDate'      => $processLogDate,
-        'totalRecordsMoved'   => $totalRecordsToMove,
-        'sales'               => $summarizedSales,
-        'raw_sales'           => $allSales,
-        'grouped_sales'       => $groupedSales,
-        'adjustments'         => $adjustments,
-        'supplier_report'     => $supplierReport, // ADDED
-        'totals'              => $totals,
+        'processLogDate'    => $processLogDate,
+        'adjustmentDate'    => $adjustmentDate,
+        'totalRecordsMoved' => $totalRecordsToMove,
+        'sales'             => $summarizedSales,
+        'raw_sales'         => $allSales,
+        'grouped_sales'     => $groupedSales,
+        'adjustments'       => $adjustments,
+        'supplier_report'   => $supplierReport,
+        'totals'            => $totals,
     ];
 
     \DB::beginTransaction();
+
     try {
+
+        // Move Sales → SalesHistory
         $historyData = [];
         $allowedColumns = (new \App\Models\Sale())->getFillable();
 
         foreach ($allSales as $sale) {
             $data = $sale->only($allowedColumns);
             unset($data['id']);
+            $data['bag_real_weight'] = $sale->bag_real_weight ?? 0;
 
             foreach ($data as $key => $value) {
                 if (is_array($value)) {
                     $data[$key] = json_encode($value);
                 }
             }
+
             $historyData[] = $data;
         }
 
         \App\Models\SalesHistory::insert($historyData);
         \App\Models\Sale::query()->delete();
 
+        // ✅ SAVE SELECTED DATE TO SETTINGS
         \App\Models\Setting::updateOrCreate(
             ['key' => 'last_day_started_date'],
             ['value' => $processLogDate]
@@ -1033,26 +1024,27 @@ public function update(Request $request, Sale $sale)
 
         // Send Email
         try {
-            \Mail::to($recipientEmail)
-                ->send(new DayEndWeightReportMail($reportData));
+            \Mail::to($recipientEmail)->send(new DayEndWeightReportMail($reportData));
         } catch (\Exception $e) {
             \Log::error("Mail Error: " . $e->getMessage());
         }
 
         return response()->json([
             'success' => true,
-            'message' => "Process complete. All reports emailed."
+            'message' => "Process complete. Reports emailed.",
+            'adjustment_date_used' => $adjustmentDate,
+            'saved_date' => $processLogDate
         ]);
 
     } catch (\Exception $e) {
         \DB::rollBack();
+
         return response()->json([
             'success' => false,
             'message' => $e->getMessage()
         ], 500);
     }
 }
-
 
 
 
