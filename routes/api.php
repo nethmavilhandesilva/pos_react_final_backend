@@ -184,4 +184,6 @@ Route::middleware('auth:sanctum')->get('/supplier-report', [ReportController::cl
 });
 //printed sales report
 Route::get('/sales-report/printed', [ReportController::class, 'getPrintedReport']);
+//update te supplier
+Route::put('/sales/{id}/update-supplier', [SupplierController::class, 'updateSupplier']);
 

@@ -370,5 +370,21 @@ public function generateFSeriesBill(): JsonResponse
             ], 500);
         }
     }
+    public function updateSupplier(Request $request, $id)
+{
+    $request->validate([
+        'supplier_code' => 'required|string'
+    ]);
+
+    $sale = Sale::findOrFail($id);
+    
+    // Update supplier_code
+    $sale->supplier_code = $request->supplier_code;
+    
+   
+    $sale->save();
+
+    return response()->json(['message' => 'Supplier updated successfully'], 200);
+}
 
 }
