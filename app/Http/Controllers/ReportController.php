@@ -42,48 +42,55 @@ class ReportController extends Controller
         ]);
     }
 
-    public function itemReport(Request $request)
-    {
-        // Log the incoming request for debugging
-        \Log::info('Item Report Request:', $request->all());
+   public function itemReport(Request $request)
+{
+    \Log::info('Item Report Request:', $request->all());
 
-        // Get parameters - try different possible names
-        $itemCode = $request->query('item_code') ?? $request->query('item_code');
+    $itemCode  = $request->query('item_code');
+    $startDate = $request->query('start_date');
+    $endDate   = $request->query('end_date');
 
-        $startDate = $request->query('start_date');
-        $endDate = $request->query('end_date');
+    \Log::info("Searching for item: $itemCode, Date range: $startDate to $endDate");
 
-        \Log::info("Searching for item: $itemCode, Date range: $startDate to $endDate");
+    if (!$itemCode) {
+        return response()->json(['error' => 'Item code is required'], 400);
+    }
 
-        if (!$itemCode) {
-            return response()->json(['error' => 'Item code is required'], 400);
-        }
+    // ✅ Decide model based on date range
+    if ($startDate && $endDate) {
+        $model = SalesHistory::query();
+        $dateColumn = 'Date'; // Your sales history date column
+    } else {
+        $model = Sale::query();
+        $dateColumn = 'created_at';
+    }
 
-        $query = Sale::query()->where('item_code', $itemCode);
+    $query = $model->where('item_code', $itemCode);
 
-        // Apply date filters only if provided
-        if ($startDate) {
-            $query->whereDate('created_at', '>=', $startDate);
-        }
-
-        if ($endDate) {
-            $query->whereDate('created_at', '<=', $endDate);
-        }
-
-        $sales = $query->get();
-
-        \Log::info("Found {$sales->count()} sales records for item: $itemCode");
-
-        return response()->json([
-            'sales' => $sales,
-            'filters' => [
-                'item_code' => $itemCode,
-                'start_date' => $startDate,
-                'end_date' => $endDate,
-                'record_count' => $sales->count()
-            ]
+    // ✅ Apply date filter only if provided
+    if ($startDate && $endDate) {
+        $query->whereBetween($dateColumn, [
+            Carbon::parse($startDate)->startOfDay(),
+            Carbon::parse($endDate)->endOfDay(),
         ]);
     }
+
+    $sales = $query->get();
+
+    \Log::info("Found {$sales->count()} sales records for item: $itemCode");
+
+    return response()->json([
+        'sales' => $sales,
+        'source_table' => $startDate && $endDate ? 'sales_history' : 'sales',
+        'filters' => [
+            'item_code' => $itemCode,
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'record_count' => $sales->count()
+        ]
+    ]);
+}
+
  public function getweight(Request $request)
 {
     $grnCode = $request->input('grn_code');
@@ -1611,28 +1618,74 @@ public function grnReport2(Request $request)
 
         return back()->with('success', 'Report generated and emails sent successfully!');
     }
-   public function getSupplierReport()
+  public function getSupplierReport(Request $request)
 {
-    $reportData = Sale::select([
-        'supplier_code',
-        'customer_code',
-        'item_code',
-        'item_name',
-        'SupplierWeight',
-        'SupplierPricePerKg',
-        'SupplierTotal',
-        'SupplierPackCost',
-        'SupplierPackLabour',
-        'profit',
-        'supplier_bill_printed',
-        'supplier_bill_no',
-        'CustomerPackCost',
-        'Date'
-    ])
-    ->orderBy('Date', 'desc')
-    ->get()
-    ->groupBy('supplier_code'); // This groups the data by supplier_code
+    $startDate = $request->query('start_date');
+    $endDate   = $request->query('end_date');
 
-    return response()->json($reportData);
+    // Decide table
+    if ($startDate && $endDate) {
+        $model = SalesHistory::query();
+        $dateColumn = 'Date';
+    } else {
+        $model = Sale::query();
+        $dateColumn = 'Date';
+    }
+
+    $query = $model->select([
+        'supplier_code', 'customer_code', 'item_code', 'item_name',
+        'SupplierWeight', 'SupplierPricePerKg', 'SupplierTotal',
+        'SupplierPackCost', 'SupplierPackLabour', 'profit',
+        'supplier_bill_printed', 'supplier_bill_no', 'CustomerPackCost', 'Date'
+    ]);
+
+    // Apply date filter
+    if ($startDate && $endDate) {
+        $query->whereBetween($dateColumn, [
+            Carbon::parse($startDate)->startOfDay(),
+            Carbon::parse($endDate)->endOfDay(),
+        ]);
+    }
+
+    $reportData = $query->orderBy('Date', 'desc')->get();
+
+    // Billed Records
+    $billedGroups = $reportData->whereNotNull('supplier_bill_no')
+        ->where('supplier_bill_no', '!=', '')
+        ->groupBy(function ($item) {
+            return $item->supplier_code . ' - Bill: ' . $item->supplier_bill_no;
+        });
+
+    // Non-Billed Records
+    $nonBilledGroups = $reportData->where(function ($item) {
+        return is_null($item->supplier_bill_no) || $item->supplier_bill_no == '';
+    })->groupBy('supplier_code');
+
+    return response()->json([
+        'billed' => $billedGroups,
+        'nonBilled' => $nonBilledGroups,
+        'source_table' => ($startDate && $endDate) ? 'sales_history' : 'sales'
+    ]);
 }
+public function getPrintedReport(Request $request)
+    {
+        // Get the filter (Y or N) from the request, default to 'Y'
+        $type = $request->query('transaction_type', 'Y');
+
+        // Fetch sales where bill_printed is 'Y' and match credit_transaction status
+        $sales = Sale::where('bill_printed', 'Y')
+            ->where('credit_transaction', $type)
+            ->select('customer_code', 'bill_no', 'total', 'created_at')
+            ->orderBy('customer_code')
+            ->orderBy('bill_no')
+            ->get();
+
+        // Group the collection by customer_code
+        $groupedSales = $sales->groupBy('customer_code');
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $groupedSales
+        ], 200);
+    }
 }

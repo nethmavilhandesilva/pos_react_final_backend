@@ -388,9 +388,6 @@ public function store(Request $request)
             if (empty($billNoToUse)) {
                 $billNoToUse = $this->generateNewBillNumber();
             }
-
-            // Step 3: Update all sales records with the determined bill number.
-            // We do this in a single transaction for reliability.
             \DB::transaction(function () use ($salesIds, $billNoToUse) {
                 $salesRecords = Sale::whereIn('id', $salesIds)->get();
 
@@ -880,22 +877,26 @@ public function update(Request $request, Sale $sale)
 
 
     public function updateGivenAmount(Request $request, Sale $sale)
-    {
-        $validated = $request->validate([
-            'given_amount' => 'required|numeric|min:0',
-        ]);
+{
+    $validated = $request->validate([
+        'given_amount' => 'required|numeric|min:0',
+        // Validate that credit_transaction is either Y or N
+        'credit_transaction' => 'sometimes|string|in:Y,N',
+    ]);
 
-        // 🔹 Update this specific sale's given_amount with the full amount
-        $sale->update([
-            'given_amount' => $validated['given_amount'] // Store the original full amount
-        ]);
+    // 🔹 Update the sale with both the amount and the credit flag
+    $sale->update([
+        'given_amount' => $validated['given_amount'],
+        // Fallback to 'N' if the frontend doesn't send it for some reason
+        'credit_transaction' => $request->get('credit_transaction', 'N'), 
+    ]);
 
-        return response()->json([
-            'status' => 'success',
-            'message' => 'Given amount updated successfully',
-            'sale' => $sale
-        ]);
-    }
+    return response()->json([
+        'status' => 'success',
+        'message' => 'Given amount and credit status updated successfully',
+        'sale' => $sale->fresh() // .fresh() ensures you return the latest DB state
+    ]);
+}
    public function processDay(Request $request)
 {
     $recipientEmail = 'nethmavilhan@gmail.com';

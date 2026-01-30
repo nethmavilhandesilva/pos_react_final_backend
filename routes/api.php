@@ -182,4 +182,6 @@ Route::get('/settings', function () {
 });
 Route::middleware('auth:sanctum')->get('/supplier-report', [ReportController::class, 'getSupplierReport']);
 });
+//printed sales report
+Route::get('/sales-report/printed', [ReportController::class, 'getPrintedReport']);
 
