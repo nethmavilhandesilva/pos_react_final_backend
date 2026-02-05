@@ -10,6 +10,9 @@ class Supplier extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['code', 'name', 'address', 'advance_amount','advance_created_date'];
+   protected $fillable = [
+    'code', 'name', 'address', 'advance_amount', 
+    'advance_created_date', 'profile_pic', 'nic_front', 'nic_back'
+];
 }
 

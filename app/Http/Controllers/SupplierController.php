@@ -18,49 +18,75 @@ class SupplierController extends Controller
         return response()->json($suppliers);
     }
 
-    public function store(Request $request)
-    {
-        $request->validate([
-            'code'    => 'required|unique:suppliers',
-            'name'    => 'required',
-            'address' => 'required',
-        ]);
+   public function store(Request $request)
+{
+    $data = $request->validate([
+        'code'         => 'required|unique:suppliers',
+        'name'         => 'required|string',
+        'address'      => 'required|string',
+        'profile_pic'  => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+        'nic_front'    => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+        'nic_back'     => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+    ]);
 
-        $data = $request->all();
-        $data['code'] = strtoupper($data['code']);
-
-        $supplier = Supplier::create($data);
-
-        return response()->json([
-            'message' => 'Supplier added successfully!',
-            'supplier' => $supplier
-        ], 201);
+    // Handle Profile Picture Upload
+    if ($request->hasFile('profile_pic')) {
+        // Stored in: storage/app/public/suppliers/profiles
+        $data['profile_pic'] = $request->file('profile_pic')->store('suppliers/profiles', 'public');
     }
 
+    // Handle NIC Front Upload
+    if ($request->hasFile('nic_front')) {
+        // Stored in: storage/app/public/suppliers/nic
+        $data['nic_front'] = $request->file('nic_front')->store('suppliers/nic', 'public');
+    }
+
+    // Handle NIC Back Upload
+    if ($request->hasFile('nic_back')) {
+        // Stored in: storage/app/public/suppliers/nic
+        $data['nic_back'] = $request->file('nic_back')->store('suppliers/nic', 'public');
+    }
+
+    // Ensure code is uppercase
+    $data['code'] = strtoupper($data['code']);
+    
+    $supplier = Supplier::create($data);
+
+    return response()->json([
+        'message' => 'Supplier added successfully!', 
+        'supplier' => $supplier
+    ], 201);
+}
     public function show(Supplier $supplier)
     {
         return response()->json($supplier);
     }
 
-    public function update(Request $request, Supplier $supplier)
-    {
-        $request->validate([
-            'code' => 'required|unique:suppliers,code,' . $supplier->id,
-            'name' => 'required',
-            'address' => 'required',
-        ]);
+   public function update(Request $request, Supplier $supplier)
+{
+    $data = $request->validate([
+        'code'         => 'required|unique:suppliers,code,' . $supplier->id,
+        'name'         => 'required|string',
+        'address'      => 'required|string',
+        'profile_pic'  => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
+        'nic_front'    => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
+        'nic_back'     => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
+    ]);
 
-        $data = $request->all();
-        $data['code'] = strtoupper($data['code']);
-
-        $supplier->update($data);
-
-        return response()->json([
-            'message' => 'Supplier updated successfully!',
-            'supplier' => $supplier
-        ]);
+    foreach (['profile_pic', 'nic_front', 'nic_back'] as $field) {
+        if ($request->hasFile($field)) {
+            if ($supplier->$field) {
+                \Storage::disk('public')->delete($supplier->$field);
+            }
+            $data[$field] = $request->file($field)->store('suppliers', 'public');
+        }
     }
 
+    $data['code'] = strtoupper($data['code']);
+    $supplier->update($data);
+
+    return response()->json(['message' => 'Supplier updated successfully!', 'supplier' => $supplier]);
+}
     public function destroy(Supplier $supplier)
     {
         $supplier->delete();
