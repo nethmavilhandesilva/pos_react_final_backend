@@ -373,7 +373,8 @@ public function generateFSeriesBill(): JsonResponse
     public function updateSupplier(Request $request, $id)
 {
     $request->validate([
-        'supplier_code' => 'required|string'
+        'supplier_code' => 'required|string',
+        'customer_code' => 'nullable|string' // 🚀 Allow optional customer code
     ]);
 
     $sale = Sale::findOrFail($id);
@@ -381,10 +382,38 @@ public function generateFSeriesBill(): JsonResponse
     // Update supplier_code
     $sale->supplier_code = $request->supplier_code;
     
-   
+    // 🚀 Only update customer_code if a value was sent
+    if ($request->filled('customer_code')) {
+        $sale->customer_code = $request->customer_code;
+    }
+    
     $sale->save();
 
-    return response()->json(['message' => 'Supplier updated successfully'], 200);
+    return response()->json([
+        'message' => 'Record updated successfully',
+        'data' => $sale
+    ], 200);
+}
+public function store2(Request $request)
+    {
+        $validated = $request->validate([
+            'code' => 'required|string',
+            'advance_amount' => 'required|numeric|min:0',
+        ]);
+
+        // Logic: Find by 'code', update or create with the 'advance_amount'
+        $supplier = Supplier::updateOrCreate(
+            ['code' => $validated['code']],
+            ['advance_amount' => $validated['advance_amount']]
+        );
+
+        return response()->json([
+            'message' => 'Supplier data saved successfully!',
+            'data' => $supplier
+        ], 200);
+    }
+    public function getByCode($code) {
+    return Supplier::where('code', $code)->firstOrFail();
 }
 
 }

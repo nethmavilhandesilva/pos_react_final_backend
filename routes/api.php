@@ -34,7 +34,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // CUSTOMERS
     Route::get('/customers', [CustomerController::class, 'apiIndex']);
     Route::post('/customers', [CustomerController::class, 'apiStore']);
-    Route::put('/customers/{customer}', [CustomerController::class, 'apiUpdate']);
+    Route::post('/customers/{customer}', [CustomerController::class, 'apiUpdate']);
     Route::delete('/customers/{customer}', [CustomerController::class, 'apiDestroy']);
 
     // ITEMS
@@ -186,4 +186,6 @@ Route::middleware('auth:sanctum')->get('/supplier-report', [ReportController::cl
 Route::get('/sales-report/printed', [ReportController::class, 'getPrintedReport']);
 //update te supplier
 Route::put('/sales/{id}/update-supplier', [SupplierController::class, 'updateSupplier']);
-
+//tore 2 metod
+Route::post('/suppliers/advance', [SupplierController::class, 'store2']);
+Route::get('/suppliers/search-by-code/{code}', [SupplierController::class, 'getByCode']);

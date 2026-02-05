@@ -909,7 +909,7 @@ public function update(Request $request, Sale $sale)
     $adjustmentDate = $lastSetting ? $lastSetting->value : $processLogDate;
 
     // 1️⃣ Fetch Current Sales
-    $allSales = \App\Models\Sale::all();
+    $allSales = Sale::all();
     $totalRecordsToMove = $allSales->count();
 
     if ($totalRecordsToMove === 0) {
@@ -920,12 +920,18 @@ public function update(Request $request, Sale $sale)
     }
 
     // 2️⃣ Fetch Adjustments using PREVIOUS stored date
-    $adjustments = \App\Models\Salesadjustment::whereDate('Date', $adjustmentDate)
+    $adjustments = Salesadjustment::whereDate('Date', $adjustmentDate)
         ->orderBy('created_at', 'desc')
         ->get();
 
+    Supplier::whereDate('advance_created_date', $processLogDate)
+    ->update([
+        'advance_amount' => 0,
+        'advance_created_date' => null
+    ]);
+
     // 3️⃣ Summarize Sales
-    $summarizedSales = \App\Models\Sale::selectRaw("
+    $summarizedSales = Sale::selectRaw("
         item_code, item_name,
         SUM(packs) AS packs,
         SUM(weight) AS weight,

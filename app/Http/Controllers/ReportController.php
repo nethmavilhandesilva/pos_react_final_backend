@@ -1668,24 +1668,23 @@ public function grnReport2(Request $request)
     ]);
 }
 public function getPrintedReport(Request $request)
-    {
-        // Get the filter (Y or N) from the request, default to 'Y'
-        $type = $request->query('transaction_type', 'Y');
+{
+    // Fetches the transaction type from query (N or Y)
+    $type = $request->query('transaction_type', 'N');
 
-        // Fetch sales where bill_printed is 'Y' and match credit_transaction status
-        $sales = Sale::where('bill_printed', 'Y')
-            ->where('credit_transaction', $type)
-            ->select('customer_code', 'bill_no', 'total', 'created_at')
-            ->orderBy('customer_code')
-            ->orderBy('bill_no')
-            ->get();
+    $sales = Sale::where('bill_printed', 'Y')
+        ->where('credit_transaction', $type)
+        // Corrected: Included 'given_amount' so React can calculate remaining balances
+        ->select('customer_code', 'bill_no', 'total', 'given_amount', 'created_at')
+        ->orderBy('customer_code')
+        ->orderBy('bill_no')
+        ->get();
 
-        // Group the collection by customer_code
-        $groupedSales = $sales->groupBy('customer_code');
+    $groupedSales = $sales->groupBy('customer_code');
 
-        return response()->json([
-            'status' => 'success',
-            'data' => $groupedSales
-        ], 200);
-    }
+    return response()->json([
+        'status' => 'success',
+        'data' => $groupedSales
+    ], 200);
+}
 }
