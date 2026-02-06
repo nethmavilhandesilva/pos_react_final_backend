@@ -189,3 +189,10 @@ Route::put('/sales/{id}/update-supplier', [SupplierController::class, 'updateSup
 //tore 2 metod
 Route::post('/suppliers/advance', [SupplierController::class, 'store2']);
 Route::get('/suppliers/search-by-code/{code}', [SupplierController::class, 'getByCode']);
+//NEW SALES REPORT
+Route::get('/reports/sales-summary', [ReportController::class, 'getSalesSummary']);
+Route::get('/reports/bill-details/{billNo}/{customerCode}', [ReportController::class, 'getBillDetails']);
+//new farmer report
+// FARMER (SUPPLIER) REPORT ROUTES
+    Route::get('/reports/farmers-summary', [ReportController::class, 'getFarmersSummary']);
+    Route::get('/reports/farmer-bill-details/{billNo}/{supplierCode}', [ReportController::class, 'getFarmerBillDetails']);

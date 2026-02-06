@@ -29,6 +29,7 @@ use App\Mail\GrnbladeReportMail;
 use App\Mail\CombinedReportsMail;
 use App\Mail\CombinedReportsMail2;
 use App\Models\GrnEntry2;
+use Illuminate\Support\Facades\DB;
 
 
 class ReportController extends Controller
@@ -1686,5 +1687,72 @@ public function getPrintedReport(Request $request)
         'status' => 'success',
         'data' => $groupedSales
     ], 200);
+}
+public function getSalesSummary(Request $request)
+    {
+        $startDate = $request->query('start_date');
+        $endDate = $request->query('end_date');
+
+        $report = Sale::where('bill_printed', 'Y')
+            ->when($startDate, function ($query) use ($startDate) {
+                return $query->whereDate('Date', '>=', $startDate);
+            })
+            ->when($endDate, function ($query) use ($endDate) {
+                return $query->whereDate('Date', '<=', $endDate);
+            })
+            // Select grouping columns and aggregate totals for the list view
+            ->select(
+                'customer_code',
+                'customer_name',
+                'bill_no',
+                'Date',
+                DB::raw('SUM(total) as total_amount'),
+                DB::raw('MAX(given_amount) as given_amount')
+            )
+            ->groupBy('customer_code', 'customer_name', 'bill_no', 'Date')
+            ->orderBy('Date', 'desc')
+            ->get();
+
+        return response()->json($report);
+    }
+
+    public function getBillDetails($billNo, $customerCode)
+    {
+        // Fetches all individual items for a specific bill to show in the modal
+        $details = Sale::where('bill_no', $billNo)
+            ->where('customer_code', $customerCode)
+            ->get();
+
+        return response()->json($details);
+    }
+    public function getFarmersSummary(Request $request)
+{
+    $startDate = $request->query('start_date');
+    $endDate = $request->query('end_date');
+
+    return Sale::where('supplier_bill_printed', 'Y')
+        ->whereNotNull('supplier_bill_no')
+        ->when($startDate, function ($query) use ($startDate) {
+            return $query->whereDate('Date', '>=', $startDate);
+        })
+        ->when($endDate, function ($query) use ($endDate) {
+            return $query->whereDate('Date', '<=', $endDate);
+        })
+        ->select(
+            'supplier_code',
+            'supplier_bill_no',
+            'Date',
+            \DB::raw('SUM(SupplierTotal) as total_amount')
+        )
+        ->groupBy('supplier_code', 'supplier_bill_no', 'Date')
+        ->orderBy('Date', 'desc')
+        ->get();
+}
+
+public function getFarmerBillDetails($billNo, $supplierCode)
+{
+    return Sale::where('supplier_bill_no', $billNo)
+        ->where('supplier_code', $supplierCode)
+        ->get();
 }
 }
