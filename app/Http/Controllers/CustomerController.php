@@ -85,4 +85,27 @@ class CustomerController extends Controller
         $customer->delete();
         return response()->json(['message' => 'Deleted successfully']);
     }
+   public function checkOrCreate(Request $request)
+{
+    // Check by short_name (Customer Code)
+    $customer = Customer::where('short_name', strtoupper($request->short_name))->first();
+
+    if ($customer) {
+        // If it exists but didn't have a phone, you might want to update it
+        if (!$customer->telephone_no && $request->telephone_no) {
+            $customer->update(['telephone_no' => $request->telephone_no]);
+        }
+        
+        return response()->json(['was_created' => false, 'customer' => $customer]);
+    }
+
+    // Create if totally new
+    $newCustomer = Customer::create([
+        'short_name' => strtoupper($request->short_name),
+        'name' => strtoupper($request->short_name),
+        'telephone_no' => $request->telephone_no,
+    ]);
+
+    return response()->json(['was_created' => true, 'customer' => $newCustomer]);
+}
 }
