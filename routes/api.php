@@ -34,7 +34,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // CUSTOMERS
     Route::get('/customers', [CustomerController::class, 'apiIndex']);
     Route::post('/customers', [CustomerController::class, 'apiStore']);
-    Route::post('/customers/{customer}', [CustomerController::class, 'apiUpdate']);
+    Route::post('/customers/update/{customer}', [CustomerController::class, 'apiUpdate']);
     Route::delete('/customers/{customer}', [CustomerController::class, 'apiDestroy']);
 
     // ITEMS
