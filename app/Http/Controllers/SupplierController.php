@@ -153,6 +153,9 @@ class SupplierController extends Controller
             'CustomerPackLabour',
             'supplier_bill_printed',
             'supplier_bill_no',
+            'profile_pic',
+            'nic_front',
+            'nic_back',
             DB::raw('DATE(created_at) as Date')
         )
         ->where('supplier_code', $supplierCode)
