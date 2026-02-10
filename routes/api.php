@@ -198,3 +198,5 @@ Route::get('/reports/bill-details/{billNo}/{customerCode}', [ReportController::c
     Route::get('/reports/farmer-bill-details/{billNo}/{supplierCode}', [ReportController::class, 'getFarmerBillDetails']);
 //add or create a customer record
 Route::post('/customers/check-or-create', [CustomerController::class, 'checkOrCreate']);
+//validation
+Route::get('/customers/check-short-name/{short_name}', [CustomerController::class, 'checkShortName']);

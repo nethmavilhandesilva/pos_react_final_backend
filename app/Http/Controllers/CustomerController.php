@@ -78,13 +78,20 @@ class CustomerController extends Controller
     $customer->update($data);
     return response()->json($customer);
 }
-    public function apiDestroy(Customer $customer)
-    {
-        // Delete images from storage before deleting record
-        Storage::disk('public')->delete([$customer->profile_pic, $customer->nic_front, $customer->nic_back]);
-        $customer->delete();
-        return response()->json(['message' => 'Deleted successfully']);
+   public function apiDestroy(Customer $customer)
+{
+    // Only keep files that exist
+    $files = array_filter([$customer->profile_pic, $customer->nic_front, $customer->nic_back]);
+
+    // Delete only if there are files
+    if (!empty($files)) {
+        Storage::disk('public')->delete($files);
     }
+
+    $customer->delete();
+
+    return response()->json(['message' => 'Deleted successfully']);
+}
    public function checkOrCreate(Request $request)
 {
     // Check by short_name (Customer Code)
@@ -107,5 +114,14 @@ class CustomerController extends Controller
     ]);
 
     return response()->json(['was_created' => true, 'customer' => $newCustomer]);
+}
+public function checkShortName($short_name)
+{
+    // Check if a customer exists with this short_name
+    $exists = \App\Models\Customer::where('short_name', strtoupper($short_name))->exists();
+
+    return response()->json([
+        'exists' => $exists
+    ]);
 }
 }
