@@ -200,3 +200,5 @@ Route::get('/reports/bill-details/{billNo}/{customerCode}', [ReportController::c
 Route::post('/customers/check-or-create', [CustomerController::class, 'checkOrCreate']);
 //validation
 Route::get('/customers/check-short-name/{short_name}', [CustomerController::class, 'checkShortName']);
+//bill preview
+Route::get('/public/bill/{token}', [SalesEntryController::class, 'viewPublicBill']);

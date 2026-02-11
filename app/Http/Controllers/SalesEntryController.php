@@ -18,6 +18,8 @@ use App\Models\Setting;
 use App\Models\CustomersLoan;
 use Illuminate\Http\JsonResponse;
 use App\Models\Commission;
+use Illuminate\Support\Str;
+use Twilio\Rest\Client;
 /* 
     SalesEntryController handles CRUD operations for sales entries,
     including complex logic for commission calculation, price updates,
@@ -369,66 +371,132 @@ public function store(Request $request)
             ], 500);
         }
     }
-    public function markAsPrinted(Request $request)
-    {
-        \Log::info('markAsPrinted Request Data:', $request->all());
+ 
+  public function markAsPrinted(Request $request)
+{
+    Log::info('markAsPrinted Request Data:', $request->all());
 
-        $salesIds = $request->input('sales_ids');
-
-        if (empty($salesIds)) {
-            return response()->json(['status' => 'error', 'message' => 'No sales IDs provided.'], 400);
-        }
-
-        try {
-            $existingBillNo = Sale::whereIn('id', $salesIds)
-                ->where('processed', 'Y')
-                ->whereNotNull('bill_no')
-                ->first()?->bill_no;
-            $billNoToUse = $existingBillNo;
-            if (empty($billNoToUse)) {
-                $billNoToUse = $this->generateNewBillNumber();
-            }
-            \DB::transaction(function () use ($salesIds, $billNoToUse) {
-                $salesRecords = Sale::whereIn('id', $salesIds)->get();
-
-                foreach ($salesRecords as $sale) {
-                    // If it's a reprint, update the timestamp for reprint history.
-                    if ($sale->bill_printed === 'Y') {
-                        $sale->BillReprintAfterChanges = now();
-                    }
-
-                    // Update the main fields for all selected records.
-                    $sale->bill_printed = 'Y';
-                    $sale->processed = 'Y';
-                    $sale->bill_no = $billNoToUse;
-
-                    // Set the first print date only if it hasn't been set before.
-                    $sale->FirstTimeBillPrintedOn = $sale->FirstTimeBillPrintedOn ?? now();
-
-                    $sale->save();
-                }
-            });
-
-            \Log::info('Sales records updated successfully for IDs:', ['sales_ids' => $salesIds, 'bill_no' => $billNoToUse]);
-
-            return response()->json([
-                'status' => 'success',
-                'message' => 'Sales marked as printed and reprint timestamp updated if needed!',
-                'bill_no' => $billNoToUse
-            ]);
-
-        } catch (\Exception $e) {
-            \Log::error('Error updating sales records:', [
-                'error' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString(),
-                'sales_ids' => $salesIds
-            ]);
-            return response()->json(['status' => 'error', 'message' => 'Failed to update sales records.'], 500);
-        }
+    $salesIds = $request->input('sales_ids');
+    if (empty($salesIds)) {
+        return response()->json(['status' => 'error', 'message' => 'No sales IDs provided.'], 400);
     }
 
+    try {
+        // 1. ✅ HANDLE BILL NUMBER GENERATION
+        $existingBillNo = Sale::whereIn('id', $salesIds)
+            ->where('processed', 'Y')
+            ->whereNotNull('bill_no')
+            ->first()?->bill_no;
+
+        $billNoToUse = $existingBillNo ?: $this->generateNewBillNumber();
+
+        // 2. ✅ UPDATE SALES RECORDS IN TRANSACTION
+        DB::transaction(function () use ($salesIds, $billNoToUse) {
+            $salesRecords = Sale::whereIn('id', $salesIds)->get();
+            foreach ($salesRecords as $sale) {
+                if ($sale->bill_printed === 'Y') {
+                    $sale->BillReprintAfterChanges = now();
+                }
+                $sale->bill_printed = 'Y';
+                $sale->processed = 'Y';
+                $sale->bill_no = $billNoToUse;
+                $sale->FirstTimeBillPrintedOn = $sale->FirstTimeBillPrintedOn ?? now();
+                $sale->save();
+            }
+        });
+
+        // 3. ✅ GENERATE ITEM SUMMARY FOR SMS (Grouped by item_code)
+        // We fetch fresh records to ensure we have the latest data
+        $itemsForSummary = Sale::whereIn('id', $salesIds)->get();
+        
+        $summaryString = $itemsForSummary->groupBy('item_code')->map(function ($group) {
+            $itemName = $group->first()->item_name;
+            $itemCode = $group->first()->item_code;
+            $totalWeight = $group->sum('weight');
+            $totalPacks = $group->sum('packs');
+            
+            // Format: item_name(item_code)=weight/packs
+            return "{$itemName}({$itemCode})={$totalWeight}/{$totalPacks}";
+        })->implode("\n");
+
+        // 4. ✅ CREATE PUBLIC BILL LINK Snapshot
+        $token = Str::random(40);
+        $baseUrl = env('APP_FRONTEND_URL', 'http://localhost:5173');
+        $publicUrl = rtrim($baseUrl, '/') . "/view-bill/" . $token;
+
+        DB::table('bill_links')->insert([
+            'token'         => $token,
+            'bill_no'       => $billNoToUse,
+            'sales_data'    => json_encode($request->sales_data ?? []),
+            'loan_amount'   => $request->loan_amount ?? 0,
+            'customer_name' => $request->customer_name,
+            'created_at'    => now(),
+            'updated_at'    => now()
+        ]);
+
+        // 5. ✅ RESOLVE TELEPHONE NUMBER
+        $to = $request->telephone_no;
+        $customerCode = $request->customer_code 
+                        ?? $request->customer_name 
+                        ?? ($request->sales_data[0]['customer_code'] ?? null);
+
+        if (empty($to) && !empty($customerCode)) {
+            $customer = \App\Models\Customer::where('short_name', $customerCode)->first();
+            if ($customer) {
+                $to = $customer->telephone_no;
+                Log::info("Found matching record for {$customerCode}. Fetched Telephone: " . $to);
+            }
+        }
+
+        // 6. ✅ SEND SMS VIA TWILIO
+        if (!empty($to)) {
+            try {
+                $sid         = env('TWILIO_SID');
+                $authToken   = env('TWILIO_AUTH_TOKEN');
+                $fromNumber  = env('TWILIO_FROM');
+
+                $twilio = new \Twilio\Rest\Client($sid, $authToken);
+
+                // Standardize Sri Lankan format
+                if (str_starts_with($to, '0')) {
+                    $to = '+94' . substr($to, 1);
+                }
+
+                // Construct Message Body with Summary
+                $messageBody = "Hello {$customerCode},\n" .
+                               "Bill #{$billNoToUse} Summary:\n" . 
+                               "{$summaryString}\n" .
+                               "View/Download: {$publicUrl}";
+
+                $twilio->messages->create($to, [
+                    'from' => $fromNumber,
+                    'body' => $messageBody
+                ]);
+
+                Log::info("Twilio SMS sent successfully with summary to: " . $to);
+
+            } catch (\Exception $e) {
+                Log::error("=== TWILIO SMS SENDING FAILED ===");
+                Log::error("Target Number: " . $to);
+                Log::error("Error Message: " . $e->getMessage());
+                Log::error("=================================");
+            }
+        } else {
+            Log::warning("SMS Process Skipped: No telephone number found for customer " . ($customerCode ?? 'Unknown'));
+        }
+
+        return response()->json([
+            'status'    => 'success',
+            'message'   => 'Sales marked as printed and SMS sent!',
+            'bill_no'   => $billNoToUse,
+            'bill_link' => $publicUrl
+        ]);
+
+    } catch (\Exception $e) {
+        Log::error('markAsPrinted Failed:', ['error' => $e->getMessage()]);
+        return response()->json(['status' => 'error', 'message' => 'Failed to update records.'], 500);
+    }
+}
     // Helper method to generate a new bill number
     private function generateNewBillNumber()
     {
@@ -1051,6 +1119,16 @@ public function update(Request $request, Sale $sale)
             'message' => $e->getMessage()
         ], 500);
     }
+}
+public function viewPublicBill($token)
+{
+    $bill = DB::table('bill_links')->where('token', $token)->first();
+
+    if (!$bill) {
+        return response()->json(['message' => 'Bill not found'], 404);
+    }
+
+    return response()->json($bill);
 }
 
 
