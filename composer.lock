@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "b229c7e7a0f7ec0bec82dcded0e982a7",
+    "content-hash": "cc6d6d8cb9cbcecd21417a41dd0fbe51",
     "packages": [
         {
             "name": "barryvdh/laravel-dompdf",
@@ -6882,6 +6882,51 @@
                 }
             ],
             "time": "2025-06-27T19:55:54+00:00"
+        },
+        {
+            "name": "textlk/textlk-php",
+            "version": "v2.0.4",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/textlk/textlk-php.git",
+                "reference": "9e491b54c5d27ee6c42c1dea54c66fb599a6119b"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/textlk/textlk-php/zipball/9e491b54c5d27ee6c42c1dea54c66fb599a6119b",
+                "reference": "9e491b54c5d27ee6c42c1dea54c66fb599a6119b",
+                "shasum": ""
+            },
+            "type": "library",
+            "extra": {
+                "laravel": {
+                    "providers": [
+                        "TextLK\\TextLKServiceProvider"
+                    ]
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "TextLK\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Chamara Indrajith",
+                    "email": "chamaraindrajith@coderog.com",
+                    "role": "Senior Software Engineer"
+                }
+            ],
+            "description": "PHP SDK for Text.lk - SMS Gateway Sri Lanka",
+            "support": {
+                "issues": "https://github.com/textlk/textlk-php/issues",
+                "source": "https://github.com/textlk/textlk-php/tree/v2.0.4"
+            },
+            "time": "2024-02-13T12:43:04+00:00"
         },
         {
             "name": "tijsverkoyen/css-to-inline-styles",

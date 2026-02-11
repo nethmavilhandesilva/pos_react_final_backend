@@ -13,6 +13,7 @@
         "laravel/tinker": "^2.10.1",
         "maatwebsite/excel": "^3.1",
         "mpdf/mpdf": "^8.2",
+        "textlk/textlk-php": "^2.0",
         "twilio/sdk": "^8.11"
     },
     "require-dev": {
