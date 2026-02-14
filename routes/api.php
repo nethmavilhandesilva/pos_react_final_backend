@@ -202,3 +202,11 @@ Route::post('/customers/check-or-create', [CustomerController::class, 'checkOrCr
 Route::get('/customers/check-short-name/{short_name}', [CustomerController::class, 'checkShortName']);
 //bill preview
 Route::get('/public/bill/{token}', [SalesEntryController::class, 'viewPublicBill']);
+//dob report
+Route::get('/suppliers-report', [SupplierController::class, 'dobreport']);
+//update supplier
+Route::post('/suppliers/update-phone', [SupplierController::class, 'updatePhone']);
+//supplier bill links
+Route::get('/public/supplier-bill/{token}', function ($token) {
+    return DB::table('supplier_bill_links')->where('token', $token)->first();
+});

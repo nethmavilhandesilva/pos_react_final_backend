@@ -11,7 +11,7 @@ class CustomerController extends Controller
 {
     public function apiIndex()
     {
-        $customers = Customer::select('id', 'name', 'short_name', 'credit_limit', 'profile_pic', 'nic_front', 'nic_back')->get();
+        $customers = Customer::select('id', 'name', 'short_name', 'credit_limit', 'profile_pic', 'nic_front', 'nic_back','telephone_no')->get();
         return response()->json($customers);
     }
 
@@ -124,4 +124,5 @@ public function checkShortName($short_name)
         'exists' => $exists
     ]);
 }
+
 }
