@@ -782,67 +782,86 @@ class SalesEntryController extends Controller
         }
     }
 
-    public function destroy(Sale $sale)
-    {
-        try {
-            // ✅ Get setting date safely
-            $settingDate = Setting::value('value') ?? now();
-            $formattedDate = Carbon::parse($settingDate)->format('Y-m-d');
+   public function destroy(Sale $sale)
+{
+    try {
+        // 1. Get setting date safely
+        $settingDate = Setting::value('value') ?? now();
+        $formattedDate = Carbon::parse($settingDate)->format('Y-m-d');
 
-            if ($sale->bill_printed === 'Y') {
+        // Check if the bill was printed to handle adjustments and SMS
+        if ($sale->bill_printed === 'Y') {
 
-                // ✅ Common adjustment data
-                $adjustmentData = [
-                    'customer_code' => $sale->customer_code,
-                    'supplier_code' => $sale->supplier_code,
-                    'code' => $sale->item_code,
-                    'item_code' => $sale->item_code,
-                    'item_name' => $sale->item_name,
-                    'weight' => $sale->weight,
-                    'price_per_kg' => $sale->price_per_kg,
-                    'total' => $sale->total,
-                    'packs' => $sale->packs,
-                    'bill_no' => $sale->bill_no,
-                    'original_created_at' => $sale->created_at, // ✅ SAFE
-                    'Date' => $formattedDate,     // ✅ Setting date
-                ];
+            // --- A. Log to Salesadjustment Table ---
+            $adjustmentData = [
+                'customer_code' => $sale->customer_code,
+                'supplier_code' => $sale->supplier_code,
+                'code' => $sale->item_code,
+                'item_code' => $sale->item_code,
+                'item_name' => $sale->item_name,
+                'weight' => $sale->weight,
+                'price_per_kg' => $sale->price_per_kg,
+                'total' => $sale->total,
+                'packs' => $sale->packs,
+                'bill_no' => $sale->bill_no,
+                'original_created_at' => $sale->created_at,
+                'Date' => $formattedDate,
+            ];
 
-                // ✅ Original record
-                Salesadjustment::create(
-                    $adjustmentData + ['type' => 'original']
-                );
+            Salesadjustment::create($adjustmentData + ['type' => 'original']);
+            Salesadjustment::create($adjustmentData + ['type' => 'deleted']);
 
-                // ✅ Deleted record
-                Salesadjustment::create(
-                    $adjustmentData + ['type' => 'deleted']
-                );
+            // --- B. Send Deleted Notification SMS ---
+            try {
+                $adminPhone = '94702758908';
+                $now = now()->format('Y-m-d H:i');
+
+                $messageBody = "❌ PRINTED SALE DELETED\n" .
+                    "Time: {$now}\n" .
+                    "Bill: " . ($sale->bill_no ?? 'N/A') . "\n" .
+                    "Cust: {$sale->customer_code}\n" .
+                    "Item: {$sale->item_code}\n" .
+                    "Wt: {$sale->weight}, Pk: {$sale->packs}\n" .
+                    "Price: {$sale->price_per_kg}, Tot: {$sale->total}";
+
+                $textLKSMS = new \TextLK\SMS\TextLKSMSMessage();
+                $textLKSMS->recipient($adminPhone)
+                    ->message($messageBody)
+                    ->senderId(env('TEXTLK_SENDER_ID', 'TextLKDemo'))
+                    ->apiKey(env('TEXTLK_API_KEY'))
+                    ->send();
+
+                Log::info("Deletion SMS sent for Printed Sale ID: " . $sale->id);
+
+            } catch (\Exception $smsEx) {
+                // We catch SMS errors separately so the DB deletion still happens
+                Log::error("Deletion SMS Failed: " . $smsEx->getMessage());
             }
-
-            // ✅ Delete sale and update GRN stock
-            $saleCode = $sale->code;
-            $sale->delete();
-            $this->updateGrnRemainingStock($saleCode);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Sales record deleted successfully.'
-            ]);
-
-        } catch (\Exception $e) {
-
-            // ✅ Helpful error logging
-            Log::error('Error deleting sale', [
-                'sale_id' => $sale->id ?? null,
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'An error occurred while deleting the sale.',
-                'error' => $e->getMessage(), // remove in production if needed
-            ], 500);
         }
+
+        // 2. Perform actual deletion and update stock
+        $saleCode = $sale->code;
+        $sale->delete();
+        $this->updateGrnRemainingStock($saleCode);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Sales record deleted successfully.'
+        ]);
+
+    } catch (\Exception $e) {
+        Log::error('Error deleting sale', [
+            'sale_id' => $sale->id ?? null,
+            'error' => $e->getMessage(),
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'An error occurred while deleting the sale.',
+            'error' => $e->getMessage(),
+        ], 500);
     }
+}
 
 
     public function updateGrnRemainingStock(): void
