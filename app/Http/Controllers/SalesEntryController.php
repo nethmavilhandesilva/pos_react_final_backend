@@ -439,7 +439,7 @@ class SalesEntryController extends Controller
 
             // 4. ✅ CREATE PUBLIC BILL LINK
             $token = Str::random(40);
-            $baseUrl = env('APP_FRONTEND_URL', 'https://talentconnect.lk/sms_new_frontend/');
+            $baseUrl = env('APP_FRONTEND_URL', 'https://goviraju.lk/sms_new_frontend_50500/');
             $publicUrl = rtrim($baseUrl, '/') . "/view-bill/" . $token;
 
             DB::table('bill_links')->insert([

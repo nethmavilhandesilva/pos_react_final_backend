@@ -27,6 +27,7 @@ class SupplierController extends Controller
         'name'         => 'required|string',
         'dob'          => 'required|date', // Added validation for DOB
         'address'      => 'required|string',
+         'telephone_no' => 'required|string|max:20',
         'profile_pic'  => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
         'nic_front'    => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
         'nic_back'     => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
