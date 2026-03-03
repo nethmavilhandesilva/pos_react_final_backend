@@ -206,6 +206,7 @@ Route::get('/public/bill/{token}', [SalesEntryController::class, 'viewPublicBill
 Route::get('/suppliers-report', [SupplierController::class, 'dobreport']);
 //update supplier
 Route::post('/suppliers/update-phone', [SupplierController::class, 'updatePhone']);
+Route::post('/suppliers/resend-sms', [SupplierController::class, 'resendSupplierSMS']);
 //supplier bill links
 Route::get('/public/supplier-bill/{token}', function ($token) {
     return DB::table('supplier_bill_links')->where('token', $token)->first();

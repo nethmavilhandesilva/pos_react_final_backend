@@ -359,12 +359,13 @@ private function sendTextLKSMS($data, $billNo, $records, $token)
         return $group->first()->item_name . ":" . $weight . "kg/" . $group->sum('packs');
     })->implode("\n");
 
-    // 4. Construct the Final Message
-    $message = "supplirer Bill\n" .
+    // 4. Construct the Final Message - NOW INCLUDING ADVANCE AMOUNT EXPLICITLY
+    $message = "Supplier Bill\n" .  // Fixed typo from "supplirer" to "Supplier"
                "Bill #{$billNo}\n" .
                "{$summary}\n" .
-               "Total: " . number_format($total, 2) . "\n" .
-               "Net: " . number_format($net, 2) . "\n" .
+               "Total: Rs. " . number_format($total, 2) . "\n" .
+               "Advance: Rs. " . number_format($data['advance_amount'], 2) . "\n" .  // Explicitly showing advance
+               "Net Payable: Rs. " . number_format($net, 2) . "\n" .
                "View Bill: {$url}";
 
     // 5. Clean the phone number
@@ -374,6 +375,9 @@ private function sendTextLKSMS($data, $billNo, $records, $token)
     \Log::info('Attempting to send SMS', [
         'bill_no' => $billNo,
         'recipient' => $recipient,
+        'advance_amount' => $data['advance_amount'],
+        'total' => $total,
+        'net' => $net,
         'message' => $message,
         'api_key_present' => !empty(env('TEXTLK_SMS_API_KEY')),
         'sender_id' => env('TEXTLK_SMS_SENDER_ID')
@@ -572,6 +576,171 @@ public function updatePhone(Request $request) {
         'message' => 'සැපයුම්කරුගේ දුරකථන අංකය යාවත්කාලීන විය!',
         'supplier' => $supplier
     ]);
+}
+public function resendSupplierSMS(Request $request)
+{
+    \Log::info('resendSupplierSMS endpoint hit', [
+        'request_data' => $request->all(),
+        'headers' => $request->headers->all()
+    ]);
+    
+    $validated = $request->validate([
+        'bill_no' => 'required|string',
+        'telephone_no' => 'required|string',
+        'supplier_code' => 'required|string',
+        'transaction_ids' => 'required|array',
+        'advance_amount' => 'required|numeric',
+        'is_reprint' => 'boolean'
+    ]);
+
+    try {
+        // Fetch the CURRENT sales records for this bill with updated data
+        $salesRecords = Sale::whereIn('id', $validated['transaction_ids'])->get();
+        
+        if ($salesRecords->isEmpty()) {
+            return response()->json(['error' => 'No records found'], 404);
+        }
+
+        \Log::info('Sales records fetched for reprint', [
+            'count' => $salesRecords->count(),
+            'bill_no' => $validated['bill_no']
+        ]);
+
+        // Check if there's an existing token for this bill
+        $existingLink = DB::table('supplier_bill_links')
+            ->where('bill_no', $validated['bill_no'])
+            ->first();
+
+        // IMPORTANT: Update the existing link with new data or create new one
+        if ($existingLink) {
+            // Update the existing link with current data
+            DB::table('supplier_bill_links')
+                ->where('bill_no', $validated['bill_no'])
+                ->update([
+                    'sales_data' => $salesRecords->toJson(),
+                    'advance_amount' => $validated['advance_amount'],
+                    'supplier_code' => $validated['supplier_code'],
+                    'updated_at' => now(),
+                ]);
+            
+            $token = $existingLink->token;
+            \Log::info('Updated existing bill link with current data', [
+                'bill_no' => $validated['bill_no'],
+                'token' => $token
+            ]);
+        } else {
+            // Create new link if doesn't exist
+            $token = $this->createNewBillLink($validated, $salesRecords);
+        }
+
+        // Send SMS with updated data
+        $smsResult = $this->sendReprintSMS($validated, $salesRecords, $token);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'SMS sent successfully with updated bill data',
+            'token' => $token
+        ]);
+
+    } catch (\Exception $e) {
+        \Log::error('resendSupplierSMS error', [
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+        return response()->json(['error' => $e->getMessage()], 500);
+    }
+}
+
+private function createNewBillLink($data, $records)
+{
+    $token = Str::random(40);
+    
+    DB::table('supplier_bill_links')->insert([
+        'token' => $token,
+        'bill_no' => $data['bill_no'],
+        'sales_data' => $records->toJson(),
+        'advance_amount' => $data['advance_amount'],
+        'supplier_code' => $data['supplier_code'],
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    
+    return $token;
+}
+
+private function sendReprintSMS($data, $records, $token)
+{
+    // Calculate totals with current data
+    $total = $records->sum('SupplierTotal');
+    $net = $total - $data['advance_amount'];
+    
+    // Build the Public View URL
+    $baseUrl = rtrim(env('APP_FRONTEND_URL'), '/');
+    $url = "{$baseUrl}/view-supplier-bill/{$token}";
+
+    // Build Item Summary String with current data
+    $summary = $records->groupBy('item_name')->map(function ($group) {
+        $weight = number_format($group->sum('weight'), 2);
+        $packs = $group->sum('packs');
+        return $group->first()->item_name . ":" . $weight . "kg/" . $packs;
+    })->implode("\n");
+
+    // Message with clear indication of updated data
+    if (isset($data['is_reprint']) && $data['is_reprint']) {
+        $message = "🔄 REPRINT - Supplier Bill (UPDATED)\n" .
+                   "Bill #{$data['bill_no']} (Reprinted)\n" .
+                   "{$summary}\n" .
+                   "Total: Rs. " . number_format($total, 2) . "\n" .
+                   "Advance: Rs. " . number_format($data['advance_amount'], 2) . "\n" .
+                   "Net: Rs. " . number_format($net, 2) . "\n" .
+                   "View Updated Bill: {$url}\n" .
+                   "Please check the updated details.";
+    } else {
+        $message = "Supplier Bill\n" .
+                   "Bill #{$data['bill_no']}\n" .
+                   "{$summary}\n" .
+                   "Total: Rs. " . number_format($total, 2) . "\n" .
+                   "Advance: Rs. " . number_format($data['advance_amount'], 2) . "\n" .
+                   "Net: Rs. " . number_format($net, 2) . "\n" .
+                   "View Bill: {$url}";
+    }
+
+    // Clean the phone number
+    $recipient = preg_replace('/[^0-9]/', '', $data['telephone_no']);
+    
+    \Log::info('Attempting to send reprint SMS with updated data', [
+        'bill_no' => $data['bill_no'],
+        'recipient' => $recipient,
+        'advance_amount' => $data['advance_amount'],
+        'total' => $total,
+        'net' => $net,
+        'is_reprint' => $data['is_reprint'] ?? false
+    ]);
+
+    // Execute Text.lk API Call
+    try {
+        $response = \Illuminate\Support\Facades\Http::withHeaders([
+            'Authorization' => 'Bearer ' . env('TEXTLK_SMS_API_KEY'),
+            'Accept' => 'application/json',
+        ])->post('https://app.text.lk/api/v3/sms/send', [
+            'recipient' => $recipient,
+            'sender_id' => env('TEXTLK_SMS_SENDER_ID'),
+            'type' => 'plain',
+            'message' => $message,
+        ]);
+        
+        \Log::info('Text.lk API Response for reprint', [
+            'status' => $response->status(),
+            'body' => $response->json()
+        ]);
+        
+        return $response;
+    } catch (\Exception $e) {
+        \Log::error('Text.lk API Error for reprint', [
+            'error' => $e->getMessage()
+        ]);
+        throw $e;
+    }
 }
 
 }
