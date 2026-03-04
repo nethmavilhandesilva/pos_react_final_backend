@@ -660,50 +660,91 @@ public function grnReport2(Request $request)
         ]);
     }
 
-    public function salesReport(Request $request)
-    {
-        // Your existing logic...
-        $useHistory = $request->filled('start_date') || $request->filled('end_date');
+ public function salesReport(Request $request)
+{
+    // Log all incoming parameters
+    \Log::info('Sales Report Request:', [
+        'all_params' => $request->all(),
+        'transaction_type' => $request->transaction_type,
+        'bill_status' => $request->bill_status,
+        'start_date' => $request->start_date,
+        'end_date' => $request->end_date,
+        'supplier_code' => $request->supplier_code,
+        'item_code' => $request->item_code,
+        'customer_code' => $request->customer_code,
+        'bill_no' => $request->bill_no
+    ]);
 
-        $query = $useHistory
-            ? SalesHistory::query()
-            : Sale::query();
+    // Your existing logic...
+    $useHistory = $request->filled('start_date') || $request->filled('end_date');
 
-        $query->where('Processed', 'Y');
+    $query = $useHistory
+        ? SalesHistory::query()
+        : Sale::query();
 
-        // Apply filters...
-        if ($request->filled('supplier_code')) {
-            $query->where('supplier_code', $request->supplier_code);
-        }
+    $query->where('Processed', 'Y');
 
-        if ($request->filled('item_code')) {
-            $query->where('item_code', $request->item_code);
-        }
-
-        if ($request->filled('customer_code')) {
-            $query->where('customer_code', $request->customer_code);
-        }
-
-        if ($request->filled('bill_no')) {
-            $query->where('bill_no', $request->bill_no);
-        }
-
-        if ($request->filled('start_date') && $request->filled('end_date')) {
-            $query->whereBetween('Date', [$request->start_date, $request->end_date]);
-        } elseif ($request->filled('start_date')) {
-            $query->where('Date', '>=', $request->start_date);
-        } elseif ($request->filled('end_date')) {
-            $query->where('Date', '<=', $request->end_date);
-        }
-
-        $query->orderBy('id', 'DESC');
-        $salesData = $query->get();
-
-        return response()->json([
-            'salesData' => $salesData,
-            'filters' => $request->all()
-        ]);
+    // Apply filters...
+    if ($request->filled('supplier_code')) {
+        $query->where('supplier_code', $request->supplier_code);
     }
+
+    if ($request->filled('item_code')) {
+        $query->where('item_code', $request->item_code);
+    }
+
+    if ($request->filled('customer_code')) {
+        $query->where('customer_code', $request->customer_code);
+    }
+
+    if ($request->filled('bill_no')) {
+        $query->where('bill_no', $request->bill_no);
+    }
+
+    // New filter for transaction type (Credit/Cash)
+    if ($request->filled('transaction_type')) {
+        \Log::info('Applying transaction_type filter:', ['value' => $request->transaction_type]);
+        
+        if ($request->transaction_type === 'credit') {
+            $query->where('credit_transaction', 'Y');
+        } elseif ($request->transaction_type === 'cash') {
+            $query->where('credit_transaction', 'N');
+        }
+    }
+
+    // New filter for bill printed status
+    if ($request->filled('bill_status')) {
+        \Log::info('Applying bill_status filter:', ['value' => $request->bill_status]);
+        
+        if ($request->bill_status === 'printed') {
+            $query->where('bill_printed', 'Y');
+        } elseif ($request->bill_status === 'not_printed') {
+            $query->where('bill_printed', 'N');
+        }
+    }
+
+    if ($request->filled('start_date') && $request->filled('end_date')) {
+        $query->whereBetween('Date', [$request->start_date, $request->end_date]);
+    } elseif ($request->filled('start_date')) {
+        $query->where('Date', '>=', $request->start_date);
+    } elseif ($request->filled('end_date')) {
+        $query->where('Date', '<=', $request->end_date);
+    }
+
+    $query->orderBy('id', 'DESC');
+    
+    // Log the SQL query for debugging
+    \Log::info('SQL Query:', ['sql' => $query->toSql(), 'bindings' => $query->getBindings()]);
+    
+    $salesData = $query->get();
+    
+    \Log::info('Records found:', ['count' => $salesData->count()]);
+
+    return response()->json([
+        'salesData' => $salesData,
+        'filters' => $request->all()
+    ]);
+}
     public function grnReport(Request $request)
     {
         $code = $request->input('code');
