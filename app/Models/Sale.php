@@ -53,7 +53,7 @@ class Sale extends Model
         'breakdown_history',
         'bag_real_weight',
         'credit_transaction',
-       
+        'loan_amount',
     ];
     protected $casts = [
     'breakdown_history' => 'array',

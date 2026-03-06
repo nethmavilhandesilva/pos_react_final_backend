@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\FarmerLoanController;
 use App\Http\Controllers\ReportController2;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -211,3 +212,16 @@ Route::post('/suppliers/resend-sms', [SupplierController::class, 'resendSupplier
 Route::get('/public/supplier-bill/{token}', function ($token) {
     return DB::table('supplier_bill_links')->where('token', $token)->first();
 });
+// Supplier Loan Routes
+Route::prefix('supplier-loan')->group(function () {
+    Route::post('/', [App\Http\Controllers\SupplierLoanController::class, 'store']);
+    Route::get('/supplier/{code}', [App\Http\Controllers\SupplierLoanController::class, 'getBySupplier']);
+    Route::get('/supplier/{code}/total', [App\Http\Controllers\SupplierLoanController::class, 'getTotalLoan']);
+    Route::get('/bill/{billNo}', [App\Http\Controllers\SupplierLoanController::class, 'getByBillNo']);
+    Route::put('/{id}', [App\Http\Controllers\SupplierLoanController::class, 'update']);
+    Route::delete('/{id}', [App\Http\Controllers\SupplierLoanController::class, 'destroy']);
+});
+//farmenrs loan
+Route::get('/farmer-loans/data', [FarmerLoanController::class, 'getTodayLoans']);
+Route::post('/farmer-loans', [FarmerLoanController::class, 'store']);
+Route::get('/farmer-loans/balance/{code}', [FarmerLoanController::class, 'getFarmerBalance']);
