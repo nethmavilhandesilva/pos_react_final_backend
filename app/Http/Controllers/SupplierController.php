@@ -431,6 +431,7 @@ private function sendTextLKSMS($data, $billNo, $records, $token)
                 'SupplierPackCost',
                 'supplier_bill_printed',
                 'supplier_bill_no',
+                'loan_taken',
                 DB::raw('DATE(created_at) as Date')
             )
             ->where('supplier_code', $supplierCode)
@@ -438,6 +439,45 @@ private function sendTextLKSMS($data, $billNo, $records, $token)
                 $query->where('supplier_bill_printed', 'N')
                       ->orWhereNull('supplier_bill_printed');
             })
+            ->whereNotNull('supplier_code') // Ensure a supplier code is present
+            ->get();
+
+            return response()->json($details);
+
+        } catch (\Exception $e) {
+            Log::error("Error fetching unprinted details for supplier {$supplierCode}: " . $e->getMessage());
+            return response()->json([
+                'error' => 'Failed to fetch unprinted details',
+                'details' => $e->getMessage()
+            ], 500);
+        }
+    }
+      public function getUnprintedDetails2($supplierCode): JsonResponse
+    {
+        try {
+            // Requirement: Records for the given supplier_code where supplier_bill_printed is 'N' or NULL.
+            $details = Sale::select(
+                'id', 
+                'supplier_code',
+                'customer_code',
+                'item_name',
+                'weight',
+                'price_per_kg',
+                'commission_amount',
+                'total', // Assuming this is for customer sale total
+                'packs',
+                'bill_no', // Original customer bill no
+                'SupplierTotal', // Supplier's gross total for the sale
+                'SupplierPricePerKg',
+                'SupplierPackCost',
+                'supplier_bill_printed',
+                'supplier_bill_no',
+                'loan_taken',
+                DB::raw('DATE(created_at) as Date')
+            )
+            ->where('supplier_code', $supplierCode)
+            ->where('supplier_bill_printed', 'Y')
+             ->where('loan_taken', 'Y')
             ->whereNotNull('supplier_code') // Ensure a supplier code is present
             ->get();
 

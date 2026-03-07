@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\FarmerLoanController;
 use App\Http\Controllers\ReportController2;
+use App\Http\Controllers\SupplierLoanController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\CustomerController;
@@ -33,6 +34,7 @@ Route::get('/items/options', [CommissionController::class, 'getItemOptions']);
 Route::middleware('auth:sanctum')->group(function () {
 
     // CUSTOMERS
+    Route::get('/suppliers/loan-summary', [SupplierLoanController::class, 'getLoanTakenSummary']);
     Route::get('/customers', [CustomerController::class, 'apiIndex']);
     Route::post('/customers', [CustomerController::class, 'apiStore']);
     Route::post('/customers/update/{customer}', [CustomerController::class, 'apiUpdate']);
@@ -146,6 +148,7 @@ Route::get('/settings', function () {
     Route::post('/suppliers/mark-as-printed', [SupplierController::class, 'marksuppliers']);
     Route::get('/suppliers/bill/{billNo}/details', [SupplierController::class, 'getBillDetails']);
     Route::get('/suppliers/{supplierCode}/unprinted-details', [SupplierController::class, 'getUnprintedDetails']);
+        Route::get('/suppliers/{supplierCode}/unprinted-details2', [SupplierController::class, 'getUnprintedDetails2']);
     //Day Process
     Route::post('/sales/process-day', [SalesEntryController::class, 'processDay']);
 
@@ -225,3 +228,4 @@ Route::prefix('supplier-loan')->group(function () {
 Route::get('/farmer-loans/data', [FarmerLoanController::class, 'getTodayLoans']);
 Route::post('/farmer-loans', [FarmerLoanController::class, 'store']);
 Route::get('/farmer-loans/balance/{code}', [FarmerLoanController::class, 'getFarmerBalance']);
+Route::get('/supplier-loan/search', [SupplierLoanController::class, 'findLoan']);
