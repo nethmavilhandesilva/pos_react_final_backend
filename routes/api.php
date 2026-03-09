@@ -39,6 +39,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/customers', [CustomerController::class, 'apiStore']);
     Route::post('/customers/update/{customer}', [CustomerController::class, 'apiUpdate']);
     Route::delete('/customers/{customer}', [CustomerController::class, 'apiDestroy']);
+    //new supplier dashboarrd routes
+    Route::get('/suppliers/all-codes', [SupplierLoanController::class, 'getAllCodes']);
+    Route::get('/suppliers/full-report', [SupplierLoanController::class, 'getFarmerFullReport']);
+
 
     // ITEMS
     Route::apiResource('items', ItemController::class);
@@ -231,3 +235,4 @@ Route::post('/farmer-loans', [FarmerLoanController::class, 'store']);
 Route::get('/farmer-loans/balance/{code}', [FarmerLoanController::class, 'getFarmerBalance']);
 Route::get('/supplier-loan/search', [SupplierLoanController::class, 'findLoan']);
 Route::get('/supplier-loans/report', [SupplierLoanController::class, 'getReport']);
+Route::post('/suppliers/delete-loan-record', [SupplierLoanController::class, 'deleteLoanRecord']);

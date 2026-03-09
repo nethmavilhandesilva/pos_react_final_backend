@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Sale;
 use App\Models\SupplierLoan;
+use DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Http\JsonResponse;
@@ -338,4 +339,66 @@ public function getReport(Request $request): JsonResponse
         ]
     ]);
 }
+public function deleteLoanRecord(Request $request)
+    {
+        // Validate the incoming request
+        $validated = $request->validate([
+            'code' => 'required|string',
+            'bill_no' => 'nullable|string',
+        ]);
+
+        $supplierCode = $validated['code'];
+        $billNo = $validated['bill_no'];
+
+        // Use a database transaction to ensure data integrity
+        DB::beginTransaction();
+
+        try {
+            // 1. Delete the entry from the supplier_loans table
+            SupplierLoan::where('code', $supplierCode)
+                ->where('bill_no', $billNo)
+                ->delete();
+
+            // 2. Update all records in the sales table matching this supplier and bill
+            // Set the 'loan_taken' column back to NULL
+            Sale::where('supplier_code', $supplierCode)
+                ->where('supplier_bill_no', $billNo)
+                ->update(['loan_taken' => null]);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Loan record deleted and sales records reset successfully.'
+            ], 200);
+
+        } catch (\Exception $e) {
+            // Rollback changes if something goes wrong
+            DB::rollback();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete record: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+    public function getAllCodes() {
+    return response()->json(\App\Models\Supplier::select('id', 'code', 'name')->get());
+}
+    public function getFarmerFullReport(Request $request) {
+    $code = $request->query('code');
+    $supplier = \App\Models\Supplier::where('code', $code)->first();
+    if (!$supplier) return response()->json(['success' => false], 404);
+
+    $loans = \App\Models\SupplierLoan::where('code', $code)->orderBy('created_at', 'desc')->get();
+    $sales = \App\Models\Sale::where('supplier_code', $code)->orderBy('Date', 'desc')->get();
+
+    return response()->json([
+        'success' => true,
+        'profile' => $supplier,
+        'loans' => $loans,
+        'sales' => $sales
+    ]);
+}
+
 }
