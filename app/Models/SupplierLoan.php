@@ -16,7 +16,12 @@ class SupplierLoan extends Model
         'loan_amount',
         'total_amount',
         'bill_no',
-        'notes'
+        'notes',
+        'type',
+        'bank_name',
+        'cheque_no',
+        'realized_date',
+        
     ];
 
     protected $casts = [

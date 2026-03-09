@@ -119,10 +119,10 @@ class SupplierController extends Controller
 {
     // 1. Get all distinct PRINTED bills (where a bill number has been successfully assigned and printed)
     $printedBills = Sale::select('supplier_code', 'supplier_bill_no')
-        ->where('supplier_bill_printed', 'Y')
-        ->whereNotNull('supplier_bill_no') // Essential guard: must have a bill number
-        ->groupBy('supplier_code', 'supplier_bill_no')
-        ->get();
+    ->where('supplier_bill_printed', 'Y')
+    ->whereNotNull('supplier_bill_no') // Essential guard: must have a bill number
+    ->groupBy('supplier_code', 'supplier_bill_no')
+    ->get();
         
     $unprintedBills = Sale::select('supplier_code')
         ->where(function ($query) {
@@ -782,5 +782,6 @@ private function sendReprintSMS($data, $records, $token)
         throw $e;
     }
 }
+ 
 
 }

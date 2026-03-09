@@ -50,6 +50,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // ✔ Custom supplier reports
     Route::get('/suppliers/bill-status-summary', [SupplierController::class, 'getSupplierBillStatusSummary']);
+    Route::get('/suppliers/supplierloans', [SupplierLoanController::class, 'getSupplierBillStatusSummary2']);
     Route::get('/suppliers/{supplierCode}/details', [SupplierController::class, 'getSupplierDetails']);
 
     // ✔ Default REST API (index, store, update, delete)
@@ -229,3 +230,4 @@ Route::get('/farmer-loans/data', [FarmerLoanController::class, 'getTodayLoans'])
 Route::post('/farmer-loans', [FarmerLoanController::class, 'store']);
 Route::get('/farmer-loans/balance/{code}', [FarmerLoanController::class, 'getFarmerBalance']);
 Route::get('/supplier-loan/search', [SupplierLoanController::class, 'findLoan']);
+Route::get('/supplier-loans/report', [SupplierLoanController::class, 'getReport']);

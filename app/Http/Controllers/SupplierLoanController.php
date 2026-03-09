@@ -22,60 +22,71 @@ public function store(Request $request): JsonResponse
         'loan_amount' => 'required|numeric|min:0',
         'total_amount' => 'required|numeric',
         'bill_no' => 'nullable|string',
+        'type' => 'required|string',
         'transaction_ids' => 'nullable|array',
-        'notes' => 'nullable|string'
+        'notes' => 'nullable|string',
+        // 🚀 NEW VALIDATION FOR CHEQUE
+        'bank_name' => 'nullable|string',
+        'cheque_no' => 'nullable|string',
+        'realized_date' => 'nullable|date'
     ]);
 
     try {
         \DB::beginTransaction();
 
-        // Check if loan already exists
-        $loan = SupplierLoan::where('code', $validated['code'])->first();
+        /**
+         * BACKEND CALCULATION
+         * Remaining balance = Total Bill - Loan Amount
+         */
+        $remainingBalance = $validated['total_amount'] - $validated['loan_amount'];
 
-        if (!$loan) {
-            // Create new loan (bill_no saved only here)
-            $loan = SupplierLoan::create([
+        /**
+         * Create or Update Supplier Loan
+         */
+        $loan = SupplierLoan::updateOrCreate(
+            [
                 'code' => $validated['code'],
+                'bill_no' => $validated['bill_no']
+            ],
+            [
                 'loan_amount' => $validated['loan_amount'],
-                'total_amount' => $validated['total_amount'],
-                'bill_no' => $validated['bill_no'], // only on create
+                'total_amount' => $remainingBalance,
+                'type' => $validated['type'],
+                'bank_name' => $validated['bank_name'] ?? null,
+                'cheque_no' => $validated['cheque_no'] ?? null,
+                'realized_date' => $validated['realized_date'] ?? null,
                 'notes' => $validated['notes'] ?? null
-            ]);
-        } else {
-            // Update existing loan WITHOUT touching bill_no
-            $loan->update([
-                'loan_amount' => $validated['loan_amount'],
-                'total_amount' => $validated['total_amount'],
-                'notes' => $validated['notes'] ?? null
-            ]);
-        }
+            ]
+        );
 
-        // Update related sales records WITHOUT touching bill_no
+        /**
+         * Update all matching sales records
+         */
         $salesQuery = Sale::where('supplier_code', $validated['code']);
 
-        if (!empty($validated['transaction_ids'])) {
-            $salesQuery->whereIn('id', $validated['transaction_ids']);
-        } elseif (!empty($validated['bill_no'])) {
+        if (!empty($validated['bill_no'])) {
             $salesQuery->where('supplier_bill_no', $validated['bill_no']);
         }
 
+        if (!empty($validated['transaction_ids'])) {
+            $salesQuery->whereIn('id', $validated['transaction_ids']);
+        }
+
         $salesQuery->update([
-            'loan_taken' => 'Y' // only this column updates
-            // NEVER update 'bill_no' here
+            'loan_taken' => 'Y'
         ]);
 
         \DB::commit();
 
         return response()->json([
             'success' => true,
-            'message' => 'Loan saved and sales records updated.',
+            'message' => 'Loan saved and matching sales records updated.',
             'data' => $loan
         ], 200);
 
     } catch (\Exception $e) {
         \DB::rollBack();
         Log::error('Loan Store Error: ' . $e->getMessage());
-
         return response()->json([
             'success' => false,
             'error' => $e->getMessage()
@@ -268,5 +279,63 @@ public function findLoan(Request $request)
     }
 
     return response()->json($loan);
+}
+public function getSupplierBillStatusSummary2()
+{
+    \Log::info("Supplier loan summary called");
+
+    $printedBills = Sale::select('supplier_code', 'supplier_bill_no')
+    ->where('supplier_bill_printed', 'Y')
+    ->whereNotNull('supplier_bill_no')
+    ->where(function ($q) {
+        $q->where('loan_taken', '!=', 'Y')
+          ->orWhereNull('loan_taken');
+    })
+    ->groupBy('supplier_code', 'supplier_bill_no')
+    ->get();
+
+    \Log::info($printedBills);
+
+    return response()->json([
+        'printed' => $printedBills,
+        'unprinted' => []
+    ]);
+}
+public function getReport(Request $request): JsonResponse
+{
+    $query = SupplierLoan::query();
+
+    // Filter by Type: Cash or Cheque
+    $query->when($request->type, function ($q) use ($request) {
+        return $q->where('type', $request->type);
+    });
+
+    // Filter by Payment Status
+    // 'not_loan' -> total_amount = 0
+    // 'loan'     -> total_amount > 0
+    $query->when($request->status, function ($q) use ($request) {
+        if ($request->status === 'not_loan') {
+            return $q->where('total_amount', 0);
+        } elseif ($request->status === 'loan') {
+            return $q->where('total_amount', '>', 0);
+        }
+    });
+
+    // Filter by Date Range (Optional but recommended)
+    $query->when($request->start_date && $request->end_date, function ($q) use ($request) {
+        return $q->whereBetween('created_at', [$request->start_date, $request->end_date]);
+    });
+
+    $data = $query->orderBy('created_at', 'desc')->get();
+
+    return response()->json([
+        'success' => true,
+        'data' => $data,
+        'summary' => [
+            'total_loan_balance' => $data->sum('total_amount'),
+            'total_paid' => $data->sum('loan_amount'),
+            'count' => $data->count()
+        ]
+    ]);
 }
 }
