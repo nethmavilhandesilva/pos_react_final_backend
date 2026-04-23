@@ -177,16 +177,37 @@ Route::get('/settings', function () {
     //loans
     Route::post('/loan-report-results', [CustomersLoanController::class, 'getLoanReportData']);
     //update given amount
-    Route::get('/sales/customer/given-amount/{customerCode}', function($customerCode) {
-    // Get the latest given_amount for this customer
-    $latestSale = \App\Models\Sale::where('customer_code', $customerCode)
+   Route::get('/sales/customer/given-amount/{customerCode}', function($customerCode) {
+    // Get all sales for this customer with non-null given_amount, ordered by bill_no and updated_at
+    $sales = \App\Models\Sale::where('customer_code', $customerCode)
         ->whereNotNull('given_amount')
+        ->orderBy('bill_no', 'asc')
         ->orderBy('updated_at', 'desc')
-        ->first();
+        ->get();
+    
+    // Group by bill_no to get the latest given_amount for each bill
+    $billAmounts = [];
+    foreach ($sales as $sale) {
+        if (!isset($billAmounts[$sale->bill_no])) {
+            $billAmounts[$sale->bill_no] = $sale->given_amount;
+        }
+    }
+    
+    // Or if you want all entries separately without grouping by latest
+    $allEntries = $sales->map(function($sale) {
+        return [
+            'bill_no' => $sale->bill_no,
+            'given_amount' => $sale->given_amount,
+            'updated_at' => $sale->updated_at
+        ];
+    });
     
     return response()->json([
         'success' => true,
-        'given_amount' => $latestSale ? $latestSale->given_amount : null
+        'customer_code' => $customerCode,
+        'latest_given_amount' => $sales->first() ? $sales->first()->given_amount : null,
+        'by_bill_no' => $billAmounts, // Latest given_amount per bill_no
+        'all_entries' => $allEntries // All entries with their bill_no
     ]);
 });
 Route::middleware('auth:sanctum')->get('/supplier-report', [ReportController::class, 'getSupplierReport']);
