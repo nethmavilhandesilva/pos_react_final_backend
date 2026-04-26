@@ -660,7 +660,7 @@ public function grnReport2(Request $request)
         ]);
     }
 
- public function salesReport(Request $request)
+public function salesReport(Request $request)
 {
     // Log all incoming parameters
     \Log::info('Sales Report Request:', [
@@ -672,10 +672,10 @@ public function grnReport2(Request $request)
         'supplier_code' => $request->supplier_code,
         'item_code' => $request->item_code,
         'customer_code' => $request->customer_code,
-        'bill_no' => $request->bill_no
+        'bill_no' => $request->bill_no,
+        'user_id' => $request->user_id  // Add this
     ]);
 
-    // Your existing logic...
     $useHistory = $request->filled('start_date') || $request->filled('end_date');
 
     $query = $useHistory
@@ -684,7 +684,12 @@ public function grnReport2(Request $request)
 
     $query->where('Processed', 'Y');
 
-    // Apply filters...
+    // Apply user filter (for "User Transactions" button)
+    if ($request->filled('user_id')) {
+        $query->where('UniqueCode', $request->user_id);
+    }
+
+    // Apply other filters...
     if ($request->filled('supplier_code')) {
         $query->where('supplier_code', $request->supplier_code);
     }
@@ -701,7 +706,7 @@ public function grnReport2(Request $request)
         $query->where('bill_no', $request->bill_no);
     }
 
-    // New filter for transaction type (Credit/Cash)
+    // Filter for transaction type (Credit/Cash)
     if ($request->filled('transaction_type')) {
         \Log::info('Applying transaction_type filter:', ['value' => $request->transaction_type]);
         
@@ -712,7 +717,7 @@ public function grnReport2(Request $request)
         }
     }
 
-    // New filter for bill printed status
+    // Filter for bill printed status
     if ($request->filled('bill_status')) {
         \Log::info('Applying bill_status filter:', ['value' => $request->bill_status]);
         

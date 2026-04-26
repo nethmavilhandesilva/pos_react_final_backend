@@ -782,86 +782,86 @@ class SalesEntryController extends Controller
         }
     }
 
-   public function destroy(Sale $sale)
-{
-    try {
-        // 1. Get setting date safely
-        $settingDate = Setting::value('value') ?? now();
-        $formattedDate = Carbon::parse($settingDate)->format('Y-m-d');
+    public function destroy(Sale $sale)
+    {
+        try {
+            // 1. Get setting date safely
+            $settingDate = Setting::value('value') ?? now();
+            $formattedDate = Carbon::parse($settingDate)->format('Y-m-d');
 
-        // Check if the bill was printed to handle adjustments and SMS
-        if ($sale->bill_printed === 'Y') {
+            // Check if the bill was printed to handle adjustments and SMS
+            if ($sale->bill_printed === 'Y') {
 
-            // --- A. Log to Salesadjustment Table ---
-            $adjustmentData = [
-                'customer_code' => $sale->customer_code,
-                'supplier_code' => $sale->supplier_code,
-                'code' => $sale->item_code,
-                'item_code' => $sale->item_code,
-                'item_name' => $sale->item_name,
-                'weight' => $sale->weight,
-                'price_per_kg' => $sale->price_per_kg,
-                'total' => $sale->total,
-                'packs' => $sale->packs,
-                'bill_no' => $sale->bill_no,
-                'original_created_at' => $sale->created_at,
-                'Date' => $formattedDate,
-            ];
+                // --- A. Log to Salesadjustment Table ---
+                $adjustmentData = [
+                    'customer_code' => $sale->customer_code,
+                    'supplier_code' => $sale->supplier_code,
+                    'code' => $sale->item_code,
+                    'item_code' => $sale->item_code,
+                    'item_name' => $sale->item_name,
+                    'weight' => $sale->weight,
+                    'price_per_kg' => $sale->price_per_kg,
+                    'total' => $sale->total,
+                    'packs' => $sale->packs,
+                    'bill_no' => $sale->bill_no,
+                    'original_created_at' => $sale->created_at,
+                    'Date' => $formattedDate,
+                ];
 
-            Salesadjustment::create($adjustmentData + ['type' => 'original']);
-            Salesadjustment::create($adjustmentData + ['type' => 'deleted']);
+                Salesadjustment::create($adjustmentData + ['type' => 'original']);
+                Salesadjustment::create($adjustmentData + ['type' => 'deleted']);
 
-            // --- B. Send Deleted Notification SMS ---
-            try {
-                $adminPhone = '94702758908';
-                $now = now()->format('Y-m-d H:i');
+                // --- B. Send Deleted Notification SMS ---
+                try {
+                    $adminPhone = '94702758908';
+                    $now = now()->format('Y-m-d H:i');
 
-                $messageBody = "❌ PRINTED SALE DELETED\n" .
-                    "Time: {$now}\n" .
-                    "Bill: " . ($sale->bill_no ?? 'N/A') . "\n" .
-                    "Cust: {$sale->customer_code}\n" .
-                    "Item: {$sale->item_code}\n" .
-                    "Wt: {$sale->weight}, Pk: {$sale->packs}\n" .
-                    "Price: {$sale->price_per_kg}, Tot: {$sale->total}";
+                    $messageBody = "❌ PRINTED SALE DELETED\n" .
+                        "Time: {$now}\n" .
+                        "Bill: " . ($sale->bill_no ?? 'N/A') . "\n" .
+                        "Cust: {$sale->customer_code}\n" .
+                        "Item: {$sale->item_code}\n" .
+                        "Wt: {$sale->weight}, Pk: {$sale->packs}\n" .
+                        "Price: {$sale->price_per_kg}, Tot: {$sale->total}";
 
-                $textLKSMS = new \TextLK\SMS\TextLKSMSMessage();
-                $textLKSMS->recipient($adminPhone)
-                    ->message($messageBody)
-                    ->senderId(env('TEXTLK_SENDER_ID', 'TextLKDemo'))
-                    ->apiKey(env('TEXTLK_API_KEY'))
-                    ->send();
+                    $textLKSMS = new \TextLK\SMS\TextLKSMSMessage();
+                    $textLKSMS->recipient($adminPhone)
+                        ->message($messageBody)
+                        ->senderId(env('TEXTLK_SENDER_ID', 'TextLKDemo'))
+                        ->apiKey(env('TEXTLK_API_KEY'))
+                        ->send();
 
-                Log::info("Deletion SMS sent for Printed Sale ID: " . $sale->id);
+                    Log::info("Deletion SMS sent for Printed Sale ID: " . $sale->id);
 
-            } catch (\Exception $smsEx) {
-                // We catch SMS errors separately so the DB deletion still happens
-                Log::error("Deletion SMS Failed: " . $smsEx->getMessage());
+                } catch (\Exception $smsEx) {
+                    // We catch SMS errors separately so the DB deletion still happens
+                    Log::error("Deletion SMS Failed: " . $smsEx->getMessage());
+                }
             }
+
+            // 2. Perform actual deletion and update stock
+            $saleCode = $sale->code;
+            $sale->delete();
+            $this->updateGrnRemainingStock($saleCode);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Sales record deleted successfully.'
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Error deleting sale', [
+                'sale_id' => $sale->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'An error occurred while deleting the sale.',
+                'error' => $e->getMessage(),
+            ], 500);
         }
-
-        // 2. Perform actual deletion and update stock
-        $saleCode = $sale->code;
-        $sale->delete();
-        $this->updateGrnRemainingStock($saleCode);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Sales record deleted successfully.'
-        ]);
-
-    } catch (\Exception $e) {
-        Log::error('Error deleting sale', [
-            'sale_id' => $sale->id ?? null,
-            'error' => $e->getMessage(),
-        ]);
-
-        return response()->json([
-            'success' => false,
-            'message' => 'An error occurred while deleting the sale.',
-            'error' => $e->getMessage(),
-        ], 500);
     }
-}
 
 
     public function updateGrnRemainingStock(): void
@@ -1181,7 +1181,153 @@ class SalesEntryController extends Controller
 
         return response()->json($bill);
     }
+   // Add this method to your SalesEntryController.php
+public function getAllSales2()
+{
+    try {
+        $currentUser = auth()->user();
 
+        $query = Sale::query();
 
+        // Filter by user if not admin
+        if ($currentUser && $currentUser->role === 'User') {
+            $query->where('UniqueCode', $currentUser->user_id);
+        }
+
+        $sales = $query->orderBy('created_at', 'desc')->get();
+
+        return response()->json([
+            'success' => true,
+            'sales' => $sales
+        ]);
+    } catch (\Exception $e) {
+        Log::error('Failed to fetch all sales: ' . $e->getMessage());
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to fetch sales data'
+        ], 500);
+    }
+}
+
+public function updateGivenAmountApplied(Request $request)
+{
+    \Log::info('updateGivenAmountApplied called', $request->all());
+
+    $request->validate([
+        'bill_no' => 'required|string',
+        'given_amount' => 'nullable|numeric|min:0',
+        'given_amount_applied' => 'required|in:Y,N',
+        'credit_transaction' => 'nullable|in:Y,N',
+        'cheq_date' => 'nullable|date',
+        'cheq_no' => 'nullable|string|max:255',
+        'bank_name' => 'nullable|string|max:255'
+    ]);
+
+    try {
+        // Build update array
+        $updateData = [
+            'given_amount' => $request->given_amount ?? 0,
+            'given_amount_applied' => $request->given_amount_applied,
+            'credit_transaction' => $request->credit_transaction ?? 'N',
+            'updated_at' => now()
+        ];
+
+        // Add cheque details if provided
+        if ($request->has('cheq_date')) {
+            $updateData['cheq_date'] = $request->cheq_date;
+        }
+        if ($request->has('cheq_no')) {
+            $updateData['cheq_no'] = $request->cheq_no;
+        }
+        if ($request->has('bank_name')) {
+            $updateData['bank_name'] = $request->bank_name;
+        }
+
+        // Use DB query builder directly to avoid route model binding issues
+        $updated = DB::table('sales')
+            ->where('bill_no', $request->bill_no)
+            ->where('bill_printed', 'Y')
+            ->update($updateData);
+
+        if ($updated === 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No sales found with this bill_no',
+                'bill_no' => $request->bill_no
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "Successfully updated {$updated} record(s)",
+            'data' => [
+                'bill_no' => $request->bill_no,
+                'given_amount' => $request->given_amount,
+                'given_amount_applied' => $request->given_amount_applied,
+                'credit_transaction' => $request->credit_transaction ?? 'N',
+                'cheq_date' => $request->cheq_date ?? null,
+                'cheq_no' => $request->cheq_no ?? null,
+                'bank_name' => $request->bank_name ?? null,
+                'affected_rows' => $updated
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        \Log::error('Error updating given amount applied:', ['error' => $e->getMessage()]);
+        return response()->json([
+            'success' => false,
+            'message' => 'Internal server error',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Update single sale record
+ */
+public function updateSaleGivenAmount(Request $request, $saleId)
+{
+    $request->validate([
+        'given_amount' => 'nullable|numeric|min:0',
+        'given_amount_applied' => 'nullable|in:Y,N',
+        'credit_transaction' => 'nullable|in:Y,N',
+        'cheq_date' => 'nullable|date',
+        'cheq_no' => 'nullable|string|max:255',
+        'bank_name' => 'nullable|string|max:255'
+    ]);
+
+    try {
+        $sale = Sale::findOrFail($saleId);
+        
+        $sale->given_amount = $request->given_amount ?? $sale->given_amount;
+        $sale->given_amount_applied = $request->given_amount_applied ?? $sale->given_amount_applied;
+        $sale->credit_transaction = $request->credit_transaction ?? $sale->credit_transaction;
+        
+        // Update cheque details if provided
+        if ($request->has('cheq_date')) {
+            $sale->cheq_date = $request->cheq_date;
+        }
+        if ($request->has('cheq_no')) {
+            $sale->cheq_no = $request->cheq_no;
+        }
+        if ($request->has('bank_name')) {
+            $sale->bank_name = $request->bank_name;
+        }
+        
+        $sale->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Sale updated successfully',
+            'data' => $sale
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Sale not found or update failed'
+        ], 404);
+    }
+}
 
 }

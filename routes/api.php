@@ -39,11 +39,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/customers', [CustomerController::class, 'apiStore']);
     Route::post('/customers/update/{customer}', [CustomerController::class, 'apiUpdate']);
     Route::delete('/customers/{customer}', [CustomerController::class, 'apiDestroy']);
+    
     //new supplier dashboarrd routes
     Route::get('/suppliers/all-codes', [SupplierLoanController::class, 'getAllCodes']);
     Route::get('/suppliers/full-report', [SupplierLoanController::class, 'getFarmerFullReport']);
-
-
+    
     // ITEMS
     Route::apiResource('items', ItemController::class);
     Route::get('items/search/{query}', [ItemController::class, 'search']);
@@ -112,8 +112,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/grn-codes', [ReportController::class, 'fetchGrnCodes']);
     Route::get('/grn-report', [ReportController::class, 'grnReport2']);
     Route::get('/financial-report', [ReportController2::class, 'getFinancialData']);
+    
     // routes/api.php
-Route::get('/settings', function () {
+    Route::get('/settings', function () {
         // We fetch the first record. 
         // If you have multiple keys, use: Setting::where('key', 'your_key')->first();
         $setting = Setting::first();
@@ -130,14 +131,32 @@ Route::get('/settings', function () {
     });
 
 
-    // SALES
-    Route::get('/sales', [SalesEntryController::class, 'index']);
+    // ======================================================================
+    // 🆕 FIXED CASHIER DASHBOARD ROUTES (Moved BEFORE parameterized routes)
+    // ======================================================================
+    
+    // Cashier Dashboard Routes - SPECIFIC PATTERNS FIRST
+    Route::get('/sales/all', [SalesEntryController::class, 'getAllSales2'])
+        ->name('sales.all');
+    
+    Route::put('/sales/update-given-amount-applied', [SalesEntryController::class, 'updateGivenAmountApplied'])
+        ->name('sales.update-given-amount-applied');
+    
+    // This is the specific route for updating given amount - MUST come before /sales/{sale}
+    Route::put('/sales/{saleId}/given-amount', [SalesEntryController::class, 'updateSaleGivenAmount'])
+        ->name('sales.update-sale-given-amount')
+        ->where('saleId', '[0-9]+'); // Only match numeric IDs
+    
+    // Regular CRUD routes - MORE GENERAL PATTERNS LAST
+    Route::get('/sales', [SalesEntryController::class, 'index']); // This will NOT conflict with /sales/all
     Route::post('/sales', [SalesEntryController::class, 'store']);
-    Route::put('/sales/{sale}', [SalesEntryController::class, 'update']);
-    Route::delete('/sales/{sale}', [SalesEntryController::class, 'destroy']);
+    Route::put('/sales/{sale}', [SalesEntryController::class, 'update'])
+        ->where('sale', '[0-9]+'); // Only match numeric IDs
+    Route::delete('/sales/{sale}', [SalesEntryController::class, 'destroy'])
+        ->where('sale', '[0-9]+'); // Only match numeric IDs
+    
     Route::post('/sales/mark-printed', [SalesEntryController::class, 'markAsPrinted']);
     Route::post('/sales/mark-all-processed', [SalesEntryController::class, 'markAllAsProcessed']);
-    Route::put('/sales/{sale}/given-amount', [SalesEntryController::class, 'updateGivenAmount']);
 
     // CUSTOMER LOAN FETCH
     Route::post('/get-loan-amount', [SalesEntryController::class, 'getLoanAmount']);
@@ -147,13 +166,16 @@ Route::get('/settings', function () {
 
     //suplier bill number
     Route::get('/generate-f-series-bill', [SupplierController::class, 'generateFSeriesBill']);
+    
     //supplier report
     Route::get('sales/profit-by-supplier', [SupplierController::class, 'getProfitBySupplier']);
+    
     //supplier bill no
     Route::post('/suppliers/mark-as-printed', [SupplierController::class, 'marksuppliers']);
     Route::get('/suppliers/bill/{billNo}/details', [SupplierController::class, 'getBillDetails']);
     Route::get('/suppliers/{supplierCode}/unprinted-details', [SupplierController::class, 'getUnprintedDetails']);
-        Route::get('/suppliers/{supplierCode}/unprinted-details2', [SupplierController::class, 'getUnprintedDetails2']);
+    Route::get('/suppliers/{supplierCode}/unprinted-details2', [SupplierController::class, 'getUnprintedDetails2']);
+    
     //Day Process
     Route::post('/sales/process-day', [SalesEntryController::class, 'processDay']);
 
@@ -173,74 +195,92 @@ Route::get('/settings', function () {
     Route::get('/api/grn-entry/{code}', [CustomersLoanController::class, 'getGrnEntry']); // NEW: For item code autofill
     Route::get('/api/all-bill-nos', [CustomersLoanController::class, 'getAllBillNos']); // NEW: For bill no dropdown
     Route::put('/customers-loans/{id}', [CustomersLoanController::class, 'update']);
-
+    
     //loans
     Route::post('/loan-report-results', [CustomersLoanController::class, 'getLoanReportData']);
+    
     //update given amount
-   Route::get('/sales/customer/given-amount/{customerCode}', function($customerCode) {
-    // Get all sales for this customer with non-null given_amount, ordered by bill_no and updated_at
-    $sales = \App\Models\Sale::where('customer_code', $customerCode)
-        ->whereNotNull('given_amount')
-        ->orderBy('bill_no', 'asc')
-        ->orderBy('updated_at', 'desc')
-        ->get();
-    
-    // Group by bill_no to get the latest given_amount for each bill
-    $billAmounts = [];
-    foreach ($sales as $sale) {
-        if (!isset($billAmounts[$sale->bill_no])) {
-            $billAmounts[$sale->bill_no] = $sale->given_amount;
+    Route::get('/sales/customer/given-amount/{customerCode}', function($customerCode) {
+        // Get all sales for this customer with non-null given_amount, ordered by bill_no and updated_at
+        $sales = \App\Models\Sale::where('customer_code', $customerCode)
+            ->whereNotNull('given_amount')
+            ->orderBy('bill_no', 'asc')
+            ->orderBy('updated_at', 'desc')
+            ->get();
+        
+        // Group by bill_no to get the latest given_amount for each bill
+        $billAmounts = [];
+        foreach ($sales as $sale) {
+            if (!isset($billAmounts[$sale->bill_no])) {
+                $billAmounts[$sale->bill_no] = $sale->given_amount;
+            }
         }
-    }
-    
-    // Or if you want all entries separately without grouping by latest
-    $allEntries = $sales->map(function($sale) {
-        return [
-            'bill_no' => $sale->bill_no,
-            'given_amount' => $sale->given_amount,
-            'updated_at' => $sale->updated_at
-        ];
+        
+        // Or if you want all entries separately without grouping by latest
+        $allEntries = $sales->map(function($sale) {
+            return [
+                'bill_no' => $sale->bill_no,
+                'given_amount' => $sale->given_amount,
+                'updated_at' => $sale->updated_at
+            ];
+        });
+        
+        return response()->json([
+            'success' => true,
+            'customer_code' => $customerCode,
+            'latest_given_amount' => $sales->first() ? $sales->first()->given_amount : null,
+            'by_bill_no' => $billAmounts, // Latest given_amount per bill_no
+            'all_entries' => $allEntries // All entries with their bill_no
+        ]);
     });
     
-    return response()->json([
-        'success' => true,
-        'customer_code' => $customerCode,
-        'latest_given_amount' => $sales->first() ? $sales->first()->given_amount : null,
-        'by_bill_no' => $billAmounts, // Latest given_amount per bill_no
-        'all_entries' => $allEntries // All entries with their bill_no
-    ]);
+    Route::middleware('auth:sanctum')->get('/supplier-report', [ReportController::class, 'getSupplierReport']);
 });
-Route::middleware('auth:sanctum')->get('/supplier-report', [ReportController::class, 'getSupplierReport']);
-});
+
+// ======================================================================
+// 🌐 PUBLIC ROUTES (Outside auth middleware - accessible without authentication)
+// ======================================================================
+
 //printed sales report
 Route::get('/sales-report/printed', [ReportController::class, 'getPrintedReport']);
-//update te supplier
+
+//update the supplier
 Route::put('/sales/{id}/update-supplier', [SupplierController::class, 'updateSupplier']);
-//tore 2 metod
+
+//store 2 method
 Route::post('/suppliers/advance', [SupplierController::class, 'store2']);
 Route::get('/suppliers/search-by-code/{code}', [SupplierController::class, 'getByCode']);
+
 //NEW SALES REPORT
 Route::get('/reports/sales-summary', [ReportController::class, 'getSalesSummary']);
 Route::get('/reports/bill-details/{billNo}/{customerCode}', [ReportController::class, 'getBillDetails']);
+
 //new farmer report
 // FARMER (SUPPLIER) REPORT ROUTES
-    Route::get('/reports/farmers-summary', [ReportController::class, 'getFarmersSummary']);
-    Route::get('/reports/farmer-bill-details/{billNo}/{supplierCode}', [ReportController::class, 'getFarmerBillDetails']);
+Route::get('/reports/farmers-summary', [ReportController::class, 'getFarmersSummary']);
+Route::get('/reports/farmer-bill-details/{billNo}/{supplierCode}', [ReportController::class, 'getFarmerBillDetails']);
+
 //add or create a customer record
 Route::post('/customers/check-or-create', [CustomerController::class, 'checkOrCreate']);
+
 //validation
 Route::get('/customers/check-short-name/{short_name}', [CustomerController::class, 'checkShortName']);
+
 //bill preview
 Route::get('/public/bill/{token}', [SalesEntryController::class, 'viewPublicBill']);
+
 //dob report
 Route::get('/suppliers-report', [SupplierController::class, 'dobreport']);
+
 //update supplier
 Route::post('/suppliers/update-phone', [SupplierController::class, 'updatePhone']);
 Route::post('/suppliers/resend-sms', [SupplierController::class, 'resendSupplierSMS']);
+
 //supplier bill links
 Route::get('/public/supplier-bill/{token}', function ($token) {
     return DB::table('supplier_bill_links')->where('token', $token)->first();
 });
+
 // Supplier Loan Routes
 Route::prefix('supplier-loan')->group(function () {
     Route::post('/', [App\Http\Controllers\SupplierLoanController::class, 'store']);
@@ -250,7 +290,8 @@ Route::prefix('supplier-loan')->group(function () {
     Route::put('/{id}', [App\Http\Controllers\SupplierLoanController::class, 'update']);
     Route::delete('/{id}', [App\Http\Controllers\SupplierLoanController::class, 'destroy']);
 });
-//farmenrs loan
+
+//farmers loan
 Route::get('/farmer-loans/data', [FarmerLoanController::class, 'getTodayLoans']);
 Route::post('/farmer-loans', [FarmerLoanController::class, 'store']);
 Route::get('/farmer-loans/balance/{code}', [FarmerLoanController::class, 'getFarmerBalance']);

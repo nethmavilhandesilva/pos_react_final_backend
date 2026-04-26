@@ -55,6 +55,10 @@ class Sale extends Model
         'credit_transaction',
         'loan_amount',
         'loan_taken',
+        'given_amount_applied',
+        'cheq_date',
+        'cheq_no',
+        'bank_name',
     ];
     protected $casts = [
     'breakdown_history' => 'array',
