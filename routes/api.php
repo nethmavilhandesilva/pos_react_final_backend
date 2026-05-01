@@ -291,6 +291,7 @@ Route::prefix('supplier-loan')->group(function () {
     Route::put('/{id}', [App\Http\Controllers\SupplierLoanController::class, 'update']);
     Route::delete('/{id}', [App\Http\Controllers\SupplierLoanController::class, 'destroy']);
 });
+
 // Farmer Loan Routes
 Route::prefix('farmer-loans')->group(function () {
     Route::post('/', [FarmerLoanController::class, 'store']);
@@ -303,7 +304,12 @@ Route::prefix('farmer-loans')->group(function () {
     Route::get('/balance/{supplier_code}/details', [FarmerLoanController::class, 'getFarmerBalanceDetails']);
     Route::get('/all-balances', [FarmerLoanController::class, 'getAllFarmersBalances']);
 });
-// Bank routes
+
+// ======================================================================
+// 🏦 BANK ROUTES (FULLY UPDATED)
+// ======================================================================
+
+// Bank CRUD routes
 Route::prefix('banks')->group(function () {
     Route::get('/', [BankController::class, 'index']);
     Route::get('/list', [BankController::class, 'getBanksList']);
@@ -311,19 +317,27 @@ Route::prefix('banks')->group(function () {
     Route::get('/{id}', [BankController::class, 'show']);
     Route::put('/{id}', [BankController::class, 'update']);
     Route::delete('/{id}', [BankController::class, 'destroy']);
-    
-    // Bank account operations
-    Route::get('/{id}/balance', [BankController::class, 'getBalance']);
-    Route::get('/{id}/statement', [BankController::class, 'getStatement']);
 });
 
-// Bank account dashboard and reports
+// Bank account dashboard and reports - IMPORTANT: 'all' route comes BEFORE parameterized routes
 Route::prefix('bank-accounts')->group(function () {
+    // Dashboard and overview
     Route::get('/dashboard', [BankController::class, 'dashboard']);
+    
+    // Transactions
     Route::get('/transactions', [BankController::class, 'getTransactions']);
     Route::get('/transactions/{id}', [BankController::class, 'getTransaction']);
+    
+    // Statement routes - CRITICAL: 'all' must come before {bankAccountId}
+    Route::get('/statement/all', [BankController::class, 'getAllAccountsStatement']);
     Route::get('/statement/{bankAccountId}', [BankController::class, 'getStatement']);
+    
+    // Balance
+    Route::get('/balance/{bankAccountId}', [BankController::class, 'getBalance']);
+    
+    // Reports
     Route::get('/cheques', [BankController::class, 'getChequeReport']);
+    Route::get('/bank-transfers', [BankController::class, 'getBankTransferReport']);
     Route::get('/monthly-summary', [BankController::class, 'getMonthlySummary']);
     Route::get('/export', [BankController::class, 'exportTransactions']);
 });
@@ -331,7 +345,7 @@ Route::prefix('bank-accounts')->group(function () {
 // Legacy routes for compatibility
 Route::get('/banks-list', [BankController::class, 'getBanksList']);
 
-// Bank routes
+// Bank routes for SalesEntryController
 Route::get('/banks', [SalesEntryController::class, 'getBanks']);
 
 // Adjustment routes
@@ -339,5 +353,7 @@ Route::get('/adjustments/pending-customer-bills', [SalesEntryController::class, 
 Route::get('/adjustments/pending-farmer-bills', [SalesEntryController::class, 'getPendingFarmerBills']);
 Route::post('/adjustments/apply', [SalesEntryController::class, 'applyPaymentAdjustment']);
 
-// Update given amount applied route (make sure this exists)
+// Update given amount applied route
 Route::put('/sales/update-given-amount-applied', [SalesEntryController::class, 'updateGivenAmountApplied']);
+// Add this route inside the auth middleware group
+Route::get('/sales/payment-history/{billNo}', [SalesEntryController::class, 'getPaymentHistory']);
