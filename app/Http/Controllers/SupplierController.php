@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\SalesHistory;
 use App\Models\Supplier;
 use Illuminate\Http\Request;
 use App\Models\Sale;
@@ -532,29 +533,75 @@ private function sendTextLKSMS($data, $billNo, $records, $token)
             ], 500);
         }
     }
-    public function updateSupplier(Request $request, $id)
+   public function updateSupplier(Request $request, $id)
 {
     $request->validate([
-        'supplier_code' => 'required|string',
-        'customer_code' => 'nullable|string' // 🚀 Allow optional customer code
+        'supplier_code' => 'nullable|string',
+        'customer_code' => 'nullable|string'
     ]);
 
     $sale = Sale::findOrFail($id);
     
+    // Store old values
+    $oldCustomerCode = $sale->customer_code;
+    $hasExistingBillNo = !is_null($sale->bill_no) && $sale->bill_no !== '';
+    
     // Update supplier_code
     $sale->supplier_code = $request->supplier_code;
     
-    // 🚀 Only update customer_code if a value was sent
+    // Check if customer_code is being changed
+    $customerCodeChanged = $request->filled('customer_code') && $request->customer_code !== $oldCustomerCode;
+    
     if ($request->filled('customer_code')) {
         $sale->customer_code = $request->customer_code;
+    }
+    
+    // 🚀 Generate new bill number ONLY if:
+    // 1. Customer code changed AND
+    // 2. Record already has an existing bill_no (printed bill)
+    $newBillNo = null;
+    if ($customerCodeChanged && $hasExistingBillNo) {
+        $newBillNo = $this->generateUniqueBillNumber();
+        $sale->bill_no = $newBillNo;
+        $sale->supplier_bill_no = $newBillNo;
+        
+        // Also update all records with the same old bill_no
+        Sale::where('bill_no', $sale->bill_no)
+            ->where('id', '!=', $id)
+            ->update(['bill_no' => $newBillNo, 'supplier_bill_no' => $newBillNo]);
     }
     
     $sale->save();
 
     return response()->json([
         'message' => 'Record updated successfully',
-        'data' => $sale
+        'data' => $sale,
+        'bill_updated' => ($customerCodeChanged && $hasExistingBillNo),
+        'new_bill_no' => $newBillNo,
+        'had_existing_bill' => $hasExistingBillNo
     ], 200);
+}
+
+/**
+ * Generate a unique 4-digit bill number
+ */
+private function generateUniqueBillNumber()
+{
+    do {
+        // Generate random 4-digit number (1000-9999)
+        $newBillNo = rand(1000, 9999);
+        
+        // Check if this bill number already exists in sales table
+        $exists = Sale::where('bill_no', $newBillNo)->exists();
+        
+        // Also check in sales_history if needed
+        if (!$exists) {
+            $exists = SalesHistory::where('bill_no', $newBillNo)->exists();
+        }
+        
+    } while ($exists);
+    
+    return $newBillNo;
 }
 public function store2(Request $request)
     {

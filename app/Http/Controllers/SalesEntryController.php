@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Mail\DayEndWeightReportMail;
+use App\Models\Bank;
 use App\Models\GrnEntry;
 use App\Models\Supplier;
 use App\Models\Sale;
@@ -1220,30 +1221,50 @@ public function updateGivenAmountApplied(Request $request)
         'credit_transaction' => 'nullable|in:Y,N',
         'cheq_date' => 'nullable|date',
         'cheq_no' => 'nullable|string|max:255',
+        'bank_account_id' => 'nullable|integer|exists:banks,id',
         'bank_name' => 'nullable|string|max:255'
     ]);
 
     try {
+        // Determine payment adjustment type - THIS IS WHAT YOU NEED
+        $paymentAdjustmentType = $request->has('cheq_no') && !empty($request->cheq_no) ? 'Cheque' : 'Cash';
+        
         // Build update array
         $updateData = [
             'given_amount' => $request->given_amount ?? 0,
             'given_amount_applied' => $request->given_amount_applied,
             'credit_transaction' => $request->credit_transaction ?? 'N',
+            'payment_adjustment_type' => $paymentAdjustmentType, // This will be 'Cash' or 'Cheque'
+            'adjustment_amount' => $request->given_amount ?? 0,
             'updated_at' => now()
         ];
 
-        // Add cheque details if provided
-        if ($request->has('cheq_date')) {
-            $updateData['cheq_date'] = $request->cheq_date;
-        }
-        if ($request->has('cheq_no')) {
-            $updateData['cheq_no'] = $request->cheq_no;
-        }
-        if ($request->has('bank_name')) {
-            $updateData['bank_name'] = $request->bank_name;
+        // Add cheque details if provided (only for cheque payments)
+        if ($paymentAdjustmentType === 'Cheque') {
+            if ($request->has('cheq_date') && $request->cheq_date) {
+                $updateData['cheq_date'] = $request->cheq_date;
+            }
+            if ($request->has('cheq_no') && $request->cheq_no) {
+                $updateData['cheq_no'] = $request->cheq_no;
+            }
+            if ($request->has('bank_account_id') && $request->bank_account_id) {
+                $updateData['bank_account_id'] = $request->bank_account_id;
+                // Fetch bank name from bank model
+                $bank = Bank::find($request->bank_account_id);
+                if ($bank) {
+                    $updateData['bank_name'] = $bank->bank_name;
+                }
+            } elseif ($request->has('bank_name')) {
+                $updateData['bank_name'] = $request->bank_name;
+            }
+        } else {
+            // For cash payments, clear any cheque details
+            $updateData['cheq_date'] = null;
+            $updateData['cheq_no'] = null;
+            $updateData['bank_account_id'] = null;
         }
 
-        // Use DB query builder directly to avoid route model binding issues
+        // Update all sales in the bill
         $updated = DB::table('sales')
             ->where('bill_no', $request->bill_no)
             ->where('bill_printed', 'Y')
@@ -1259,15 +1280,16 @@ public function updateGivenAmountApplied(Request $request)
 
         return response()->json([
             'success' => true,
-            'message' => "Successfully updated {$updated} record(s)",
+            'message' => "Successfully updated {$updated} record(s) with {$paymentAdjustmentType} payment",
             'data' => [
                 'bill_no' => $request->bill_no,
                 'given_amount' => $request->given_amount,
                 'given_amount_applied' => $request->given_amount_applied,
                 'credit_transaction' => $request->credit_transaction ?? 'N',
+                'payment_adjustment_type' => $paymentAdjustmentType,
                 'cheq_date' => $request->cheq_date ?? null,
                 'cheq_no' => $request->cheq_no ?? null,
-                'bank_name' => $request->bank_name ?? null,
+                'bank_name' => $updateData['bank_name'] ?? null,
                 'affected_rows' => $updated
             ]
         ]);
@@ -1327,6 +1349,238 @@ public function updateSaleGivenAmount(Request $request, $saleId)
             'success' => false,
             'message' => 'Sale not found or update failed'
         ], 404);
+    }
+}
+public function getBanks()
+{
+    try {
+        $banks = Bank::all(['id', 'bank_name', 'branch', 'account_no']);
+        return response()->json([
+            'success' => true,
+            'data' => $banks
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to fetch banks'
+        ], 500);
+    }
+}
+
+/**
+ * Get pending bills for bill-to-bill adjustment (Customer)
+ */
+public function getPendingCustomerBills(Request $request)
+{
+    try {
+        $request->validate([
+            'customer_code' => 'required|string'
+        ]);
+
+        $customerCode = $request->customer_code;
+
+        // Fix: Use DB::raw in having clause and properly reference columns
+        $pendingBills = DB::table('sales')
+            ->select(
+                'bill_no',                 'customer_code', 
+                DB::raw('SUM(total + (packs * CustomerPackCost)) as total_amount'),
+                DB::raw('MAX(given_amount) as given_amount')
+            )
+            ->where('customer_code', $customerCode)
+            ->where('bill_printed', 'Y')
+            ->where('given_amount_applied', 'N')
+            ->groupBy('bill_no', 'customer_code')
+            ->havingRaw('SUM(total + (packs * CustomerPackCost)) > COALESCE(MAX(given_amount), 0)')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $pendingBills
+        ]);
+
+    } catch (\Exception $e) {
+        Log::error('Failed to fetch pending customer bills: ' . $e->getMessage());
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to fetch pending bills: ' . $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Get pending farmer bills (Supplier) - Fixed version
+ */
+public function getPendingFarmerBills(Request $request)
+{
+    try {
+        $request->validate([
+            'supplier_code' => 'required|string'
+        ]);
+
+        $supplierCode = $request->supplier_code;
+
+        $pendingBills = DB::table('sales')
+            ->select(
+                'supplier_bill_no', 
+                'supplier_code', 
+                DB::raw('SUM(SupplierTotal) as total_amount')
+            )
+            ->where('supplier_code', $supplierCode)
+            ->where('supplier_bill_printed', 'Y')
+            ->where('supplier_paid_status', 'N')
+            ->whereNotNull('supplier_bill_no')
+            ->groupBy('supplier_bill_no', 'supplier_code')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $pendingBills
+        ]);
+
+    } catch (\Exception $e) {
+        Log::error('Failed to fetch pending farmer bills: ' . $e->getMessage());
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to fetch pending farmer bills: ' . $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Apply payment adjustment and update remaining amount
+ */
+public function applyPaymentAdjustment(Request $request)
+{
+    $request->validate([
+        'bill_no' => 'required|string',
+        'adjustment_type' => 'required|in:bag_to_box,bill_to_bill,bad_debt',
+        'original_bill_total' => 'required|numeric'
+    ]);
+
+    try {
+        DB::beginTransaction();
+
+        // Get the original bill total
+        $totalBillAmount = Sale::where('bill_no', $request->bill_no)
+            ->where('bill_printed', 'Y')
+            ->select(DB::raw('SUM(total + (packs * CustomerPackCost)) as total'))
+            ->value('total');
+
+        $adjustmentAmount = 0;
+        $updateData = [
+            'payment_adjustment_type' => $request->adjustment_type,
+            'updated_at' => now()
+        ];
+
+        if ($request->adjustment_type === 'bag_to_box') {
+            $request->validate([
+                'bag_count' => 'required|integer|min:0',
+                'box_count' => 'required|integer|min:0',
+                'bag_value' => 'required|numeric|min:0',
+                'box_value' => 'required|numeric|min:0'
+            ]);
+
+            $totalBagValue = $request->bag_count * $request->bag_value;
+            $totalBoxValue = $request->box_count * $request->box_value;
+            $adjustmentAmount = $totalBagValue - $totalBoxValue;
+
+            $updateData['bag_count'] = $request->bag_count;
+            $updateData['box_count'] = $request->box_count;
+            $updateData['bag_value'] = $request->bag_value;
+            $updateData['box_value'] = $request->box_value;
+            $updateData['adjustment_amount'] = $adjustmentAmount;
+        }
+
+        if ($request->adjustment_type === 'bill_to_bill') {
+            $request->validate([
+                'customer_code' => 'required|string',
+                'customer_bill_no' => 'required|string',
+                'customer_bill_value' => 'required|numeric|min:0',
+                'farmer_code' => 'required|string',
+                'farmer_bill_no' => 'required|string',
+                'farmer_bill_value' => 'required|numeric|min:0'
+            ]);
+
+            $adjustmentAmount = $request->customer_bill_value + $request->farmer_bill_value;
+
+            $updateData['target_customer_code'] = $request->customer_code;
+            $updateData['target_bill_no'] = $request->customer_bill_no;
+            $updateData['target_bill_value'] = $request->customer_bill_value;
+            $updateData['target_supplier_code'] = $request->farmer_code;
+            $updateData['target_supplier_bill_no'] = $request->farmer_bill_no;
+            $updateData['target_supplier_bill_value'] = $request->farmer_bill_value;
+            $updateData['adjustment_amount'] = $adjustmentAmount;
+
+            // Update the target customer bill
+            Sale::where('bill_no', $request->customer_bill_no)
+                ->where('bill_printed', 'Y')
+                ->update([
+                    'given_amount' => DB::raw('COALESCE(given_amount, 0) + ' . $request->customer_bill_value),
+                    'given_amount_applied' => DB::raw('CASE WHEN COALESCE(given_amount, 0) + ' . $request->customer_bill_value . ' >= total + (packs * CustomerPackCost) THEN "Y" ELSE "N" END'),
+                    'updated_at' => now()
+                ]);
+
+            // Update the farmer bill
+            Sale::where('supplier_bill_no', $request->farmer_bill_no)
+                ->where('supplier_bill_printed', 'Y')
+                ->update([
+                    'supplier_paid_amount' => DB::raw('COALESCE(supplier_paid_amount, 0) + ' . $request->farmer_bill_value),
+                    'supplier_paid_status' => 'Y',
+                    'updated_at' => now()
+                ]);
+        }
+
+        if ($request->adjustment_type === 'bad_debt') {
+            $request->validate([
+                'bad_debt_name' => 'required|string',
+                'bad_debt_amount' => 'required|numeric|min:0'
+            ]);
+
+            $adjustmentAmount = $request->bad_debt_amount;
+            $updateData['bad_debt_name'] = $request->bad_debt_name;
+            $updateData['bad_debt_amount'] = $request->bad_debt_amount;
+            $updateData['adjustment_amount'] = $adjustmentAmount;
+        }
+
+        // Update all sales in the bill with the adjustment
+        Sale::where('bill_no', $request->bill_no)
+            ->where('bill_printed', 'Y')
+            ->update($updateData);
+
+        // Get current given amount and update
+        $currentGiven = Sale::where('bill_no', $request->bill_no)
+            ->where('bill_printed', 'Y')
+            ->value('given_amount');
+            
+        $newGivenAmount = ($currentGiven ?? 0) + $adjustmentAmount;
+
+        Sale::where('bill_no', $request->bill_no)
+            ->where('bill_printed', 'Y')
+            ->update([
+                'given_amount' => $newGivenAmount,
+                'given_amount_applied' => $newGivenAmount >= $totalBillAmount ? 'Y' : 'N',
+                'credit_transaction' => $newGivenAmount >= $totalBillAmount ? 'N' : 'Y'
+            ]);
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Payment adjustment applied successfully',
+            'data' => [
+                'adjustment_amount' => $adjustmentAmount,
+                'new_given_amount' => $newGivenAmount,
+                'remaining' => max(0, $totalBillAmount - $newGivenAmount)
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+        Log::error('Payment adjustment failed:', ['error' => $e->getMessage()]);
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to apply adjustment: ' . $e->getMessage()
+        ], 500);
     }
 }
 

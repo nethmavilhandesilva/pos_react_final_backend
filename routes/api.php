@@ -15,6 +15,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\SalesEntryController;
 use App\Http\Controllers\CommissionController;
 use App\Models\Setting;
+use App\Http\Controllers\BankController;
 
 // ----------------------------------------------------------------------
 // 🚨 PUBLIC ROUTES (No Authentication Required) 🚨
@@ -290,11 +291,53 @@ Route::prefix('supplier-loan')->group(function () {
     Route::put('/{id}', [App\Http\Controllers\SupplierLoanController::class, 'update']);
     Route::delete('/{id}', [App\Http\Controllers\SupplierLoanController::class, 'destroy']);
 });
+// Farmer Loan Routes
+Route::prefix('farmer-loans')->group(function () {
+    Route::post('/', [FarmerLoanController::class, 'store']);
+    Route::get('/data', [FarmerLoanController::class, 'getLoansData']);  // Changed from getTodayLoans
+    Route::get('/all', [FarmerLoanController::class, 'getLoansData']);    // With ?all=true parameter
+    Route::get('/{id}', [FarmerLoanController::class, 'getLoan']);         // Get single loan
+    Route::put('/{id}', [FarmerLoanController::class, 'update']);
+    Route::delete('/{id}', [FarmerLoanController::class, 'destroy']);
+    Route::get('/balance/{supplier_code}', [FarmerLoanController::class, 'getFarmerBalance']);
+    Route::get('/balance/{supplier_code}/details', [FarmerLoanController::class, 'getFarmerBalanceDetails']);
+    Route::get('/all-balances', [FarmerLoanController::class, 'getAllFarmersBalances']);
+});
+// Bank routes
+Route::prefix('banks')->group(function () {
+    Route::get('/', [BankController::class, 'index']);
+    Route::get('/list', [BankController::class, 'getBanksList']);
+    Route::post('/', [BankController::class, 'store']);
+    Route::get('/{id}', [BankController::class, 'show']);
+    Route::put('/{id}', [BankController::class, 'update']);
+    Route::delete('/{id}', [BankController::class, 'destroy']);
+    
+    // Bank account operations
+    Route::get('/{id}/balance', [BankController::class, 'getBalance']);
+    Route::get('/{id}/statement', [BankController::class, 'getStatement']);
+});
 
-//farmers loan
-Route::get('/farmer-loans/data', [FarmerLoanController::class, 'getTodayLoans']);
-Route::post('/farmer-loans', [FarmerLoanController::class, 'store']);
-Route::get('/farmer-loans/balance/{code}', [FarmerLoanController::class, 'getFarmerBalance']);
-Route::get('/supplier-loan/search', [SupplierLoanController::class, 'findLoan']);
-Route::get('/supplier-loans/report', [SupplierLoanController::class, 'getReport']);
-Route::post('/suppliers/delete-loan-record', [SupplierLoanController::class, 'deleteLoanRecord']);
+// Bank account dashboard and reports
+Route::prefix('bank-accounts')->group(function () {
+    Route::get('/dashboard', [BankController::class, 'dashboard']);
+    Route::get('/transactions', [BankController::class, 'getTransactions']);
+    Route::get('/transactions/{id}', [BankController::class, 'getTransaction']);
+    Route::get('/statement/{bankAccountId}', [BankController::class, 'getStatement']);
+    Route::get('/cheques', [BankController::class, 'getChequeReport']);
+    Route::get('/monthly-summary', [BankController::class, 'getMonthlySummary']);
+    Route::get('/export', [BankController::class, 'exportTransactions']);
+});
+
+// Legacy routes for compatibility
+Route::get('/banks-list', [BankController::class, 'getBanksList']);
+
+// Bank routes
+Route::get('/banks', [SalesEntryController::class, 'getBanks']);
+
+// Adjustment routes
+Route::get('/adjustments/pending-customer-bills', [SalesEntryController::class, 'getPendingCustomerBills']);
+Route::get('/adjustments/pending-farmer-bills', [SalesEntryController::class, 'getPendingFarmerBills']);
+Route::post('/adjustments/apply', [SalesEntryController::class, 'applyPaymentAdjustment']);
+
+// Update given amount applied route (make sure this exists)
+Route::put('/sales/update-given-amount-applied', [SalesEntryController::class, 'updateGivenAmountApplied']);
