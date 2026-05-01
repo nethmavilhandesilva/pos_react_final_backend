@@ -71,6 +71,7 @@ class Sale extends Model
         'supplier_paid_status',
         'adjustment_amount',
         'bank_account_id',
+        'payment_history',
     ];
 
     protected $casts = [
@@ -85,6 +86,7 @@ class Sale extends Model
         'bad_debt_amount' => 'decimal:2',
         'supplier_paid_amount' => 'decimal:2',
         'cheq_date' => 'date',
+        'payment_history' => 'array', // This automatically handles JSON conversion
     ];
 
     public $timestamps = true;
@@ -109,6 +111,106 @@ class Sale extends Model
         return $this->belongsTo(Bank::class, 'bank_account_id');
     }
 
+    // ==================== PAYMENT HISTORY METHODS ====================
+    
+    /**
+     * Get payment history as array
+     */
+    public function getPaymentHistoryAttribute($value)
+    {
+        if (is_null($value)) {
+            return [];
+        }
+        if (is_array($value)) {
+            return $value;
+        }
+        return json_decode($value, true) ?: [];
+    }
+    
+    /**
+     * Set payment history
+     */
+    public function setPaymentHistoryAttribute($value)
+    {
+        if (is_array($value)) {
+            $this->attributes['payment_history'] = json_encode($value);
+        } else {
+            $this->attributes['payment_history'] = $value;
+        }
+    }
+    
+    /**
+     * Add a payment to history
+     */
+    public function addPayment($paymentData)
+    {
+        $history = $this->payment_history;
+        $history[] = $paymentData;
+        $this->payment_history = $history;
+        return $this->save();
+    }
+    
+    /**
+     * Get payment summary for display
+     */
+    public function getPaymentSummaryAttribute()
+    {
+        $history = $this->payment_history;
+        if (!$history || empty($history)) {
+            return [];
+        }
+        
+        return array_map(function($payment) {
+            $reference = null;
+            if (isset($payment['details']['cheq_no'])) {
+                $reference = $payment['details']['cheq_no'];
+            } elseif (isset($payment['details']['transfer_reference_no'])) {
+                $reference = $payment['details']['transfer_reference_no'];
+            } elseif (isset($payment['details']['bad_debt_name'])) {
+                $reference = $payment['details']['bad_debt_name'];
+            } elseif (isset($payment['details']['target_bill_no'])) {
+                $reference = $payment['details']['target_bill_no'];
+            }
+            
+            return [
+                'date' => $payment['date'],
+                'amount' => (float)$payment['amount'],
+                'method' => $payment['method'],
+                'reference' => $reference,
+                'running_balance' => $payment['running_balance'] ?? null,
+                'is_fully_paid' => $payment['is_fully_paid'] ?? false
+            ];
+        }, $history);
+    }
+    
+    /**
+     * Get total paid amount from payment history
+     */
+    public function getTotalPaidFromHistoryAttribute()
+    {
+        $history = $this->payment_history;
+        if (!$history || empty($history)) {
+            return 0;
+        }
+        
+        return array_sum(array_column($history, 'amount'));
+    }
+    
+    /**
+     * Get last payment
+     */
+    public function getLastPaymentAttribute()
+    {
+        $history = $this->payment_history;
+        if (!$history || empty($history)) {
+            return null;
+        }
+        
+        return end($history);
+    }
+
+    // ==================== EXISTING ACCESSOR METHODS ====================
+
     public function getTotalBagValueAttribute()
     {
         return ($this->bag_count ?? 0) * ($this->bag_value ?? 0);
@@ -126,7 +228,7 @@ class Sale extends Model
 
     public function getHasPaymentAdjustmentAttribute()
     {
-        return $this->payment_adjustment_type !== null && $this->payment_adjustment_type !== 'none';
+        return $this->payment_adjustment_type !== null && $this->payment_adjustment_type !== 'none' && $this->payment_adjustment_type !== 'Cash';
     }
 
     public function getAdjustmentTypeLabelAttribute()
@@ -135,6 +237,9 @@ class Sale extends Model
             'bag_to_box' => 'Bag to Box Conversion',
             'bill_to_bill' => 'Bill to Bill Transfer',
             'bad_debt' => 'Bad Debt Write-off',
+            'Cash' => 'Cash Payment',
+            'Cheque' => 'Cheque Payment',
+            'Bank Transfer' => 'Bank Transfer',
             'none' => 'No Adjustment'
         ];
         return $labels[$this->payment_adjustment_type] ?? 'Unknown';
@@ -180,55 +285,6 @@ class Sale extends Model
         }
         
         return $summary;
-    }
-
-    public function scopePending($query)
-    {
-        return $query->where('bill_printed', 'Y')
-                     ->where(function($q) {
-                         $q->where('given_amount_applied', 'N')
-                           ->orWhereRaw('COALESCE(given_amount, 0) < (total + (packs * CustomerPackCost))');
-                     });
-    }
-
-    public function scopeCompleted($query)
-    {
-        return $query->where('bill_printed', 'Y')
-                     ->where('given_amount_applied', 'Y')
-                     ->whereRaw('COALESCE(given_amount, 0) >= (total + (packs * CustomerPackCost))');
-    }
-
-    public function scopeChequePayments($query)
-    {
-        return $query->whereNotNull('cheq_no')
-                     ->whereNotNull('bank_account_id');
-    }
-
-    public function scopeWithAdjustments($query)
-    {
-        return $query->whereNotNull('payment_adjustment_type')
-                     ->where('payment_adjustment_type', '!=', 'none');
-    }
-
-    public function scopeBagToBoxAdjustments($query)
-    {
-        return $query->where('payment_adjustment_type', 'bag_to_box');
-    }
-
-    public function scopeBillToBillAdjustments($query)
-    {
-        return $query->where('payment_adjustment_type', 'bill_to_bill');
-    }
-
-    public function scopeBadDebtAdjustments($query)
-    {
-        return $query->where('payment_adjustment_type', 'bad_debt');
-    }
-
-    public function scopeUnpaidSupplierBills($query)
-    {
-        return $query->where('supplier_bill_printed', 'Y')
-                     ->where('supplier_paid_status', 'N');
     }
 
     public function getChequeDetailsAttribute()
@@ -287,6 +343,72 @@ class Sale extends Model
         return $details;
     }
 
+    // ==================== SCOPES ====================
+
+    public function scopePending($query)
+    {
+        return $query->where('bill_printed', 'Y')
+                     ->where(function($q) {
+                         $q->where('given_amount_applied', 'N')
+                           ->orWhereRaw('COALESCE(given_amount, 0) < (total + (packs * CustomerPackCost))');
+                     });
+    }
+
+    public function scopeCompleted($query)
+    {
+        return $query->where('bill_printed', 'Y')
+                     ->where('given_amount_applied', 'Y')
+                     ->whereRaw('COALESCE(given_amount, 0) >= (total + (packs * CustomerPackCost))');
+    }
+
+    public function scopeChequePayments($query)
+    {
+        return $query->whereNotNull('cheq_no')
+                     ->whereNotNull('bank_account_id');
+    }
+
+    public function scopeCashPayments($query)
+    {
+        return $query->where('payment_adjustment_type', 'Cash');
+    }
+
+    public function scopeBankTransferPayments($query)
+    {
+        return $query->where('payment_adjustment_type', 'Bank Transfer');
+    }
+
+    public function scopeWithAdjustments($query)
+    {
+        return $query->whereNotNull('payment_adjustment_type')
+                     ->where('payment_adjustment_type', '!=', 'none')
+                     ->where('payment_adjustment_type', '!=', 'Cash')
+                     ->where('payment_adjustment_type', '!=', 'Cheque')
+                     ->where('payment_adjustment_type', '!=', 'Bank Transfer');
+    }
+
+    public function scopeBagToBoxAdjustments($query)
+    {
+        return $query->where('payment_adjustment_type', 'bag_to_box');
+    }
+
+    public function scopeBillToBillAdjustments($query)
+    {
+        return $query->where('payment_adjustment_type', 'bill_to_bill');
+    }
+
+    public function scopeBadDebtAdjustments($query)
+    {
+        return $query->where('payment_adjustment_type', 'bad_debt');
+    }
+
+    public function scopeUnpaidSupplierBills($query)
+    {
+        return $query->where('supplier_bill_printed', 'Y')
+                     ->where('supplier_paid_status', 'N');
+    }
+
+    // ==================== BOOT METHOD ====================
+
     protected static function boot()
     {
         parent::boot();
@@ -322,12 +444,4 @@ class Sale extends Model
             }
         });
     }
-    // Add these methods to your Sale model
-public function scopeCashPayments($query)
-{
-    return $query->where('payment_adjustment_type', 'Cash');
-}
-
-
-// Update the existing getAdjustmentTypeLabelAttribute method
 }

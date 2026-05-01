@@ -1219,37 +1219,141 @@ public function updateGivenAmountApplied(Request $request)
         'given_amount' => 'nullable|numeric|min:0',
         'given_amount_applied' => 'required|in:Y,N',
         'credit_transaction' => 'nullable|in:Y,N',
+        'payment_amount' => 'required|numeric|min:0',
+        'payment_method' => 'required|string',
         'cheq_date' => 'nullable|date',
         'cheq_no' => 'nullable|string|max:255',
         'bank_account_id' => 'nullable|integer|exists:banks,id',
         'bank_name' => 'nullable|string|max:255',
         'transfer_reference_no' => 'nullable|string|max:255',
         'transfer_date' => 'nullable|date',
-        'transfer_notes' => 'nullable|string'
+        'transfer_notes' => 'nullable|string',
+        'bag_count' => 'nullable|integer',
+        'box_count' => 'nullable|integer',
+        'bag_value' => 'nullable|numeric',
+        'box_value' => 'nullable|numeric',
+        'target_customer_code' => 'nullable|string',
+        'target_bill_no' => 'nullable|string',
+        'target_bill_value' => 'nullable|numeric',
+        'target_supplier_code' => 'nullable|string',
+        'target_supplier_bill_no' => 'nullable|string',
+        'target_supplier_bill_value' => 'nullable|numeric',
+        'bad_debt_name' => 'nullable|string',
+        'bad_debt_amount' => 'nullable|numeric'
     ]);
 
     try {
-        // Determine payment adjustment type
-        $paymentAdjustmentType = 'Cash';
-        
-        if ($request->has('transfer_reference_no') && !empty($request->transfer_reference_no)) {
-            $paymentAdjustmentType = 'Bank Transfer';
-        } elseif ($request->has('cheq_no') && !empty($request->cheq_no)) {
-            $paymentAdjustmentType = 'Cheque';
+        DB::beginTransaction();
+
+        // Get the current sale record
+        $sale = DB::table('sales')
+            ->where('bill_no', $request->bill_no)
+            ->where('bill_printed', 'Y')
+            ->first();
+
+        if (!$sale) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'No sales found with this bill_no',
+                'bill_no' => $request->bill_no
+            ], 404);
+        }
+
+        // Get existing payment history or initialize empty array
+        $paymentHistory = [];
+        if ($sale->payment_history) {
+            // Check if it's already an array or needs decoding
+            if (is_string($sale->payment_history)) {
+                $paymentHistory = json_decode($sale->payment_history, true) ?: [];
+            } elseif (is_array($sale->payment_history)) {
+                $paymentHistory = $sale->payment_history;
+            }
         }
         
-        // Build update array
+        // Calculate new running total
+        $previousTotal = (float)($sale->given_amount ?? 0);
+        $paymentAmount = (float)$request->payment_amount;
+        $newTotal = $previousTotal + $paymentAmount;
+        $isFullyPaid = $request->given_amount_applied === 'Y';
+        
+        // Create payment record
+        $paymentRecord = [
+            'id' => uniqid(),
+            'date' => now()->toDateTimeString(),
+            'amount' => $paymentAmount,
+            'method' => $request->payment_method,
+            'running_balance' => $newTotal,
+            'is_fully_paid' => $isFullyPaid,
+            'reference' => null,
+            'details' => []
+        ];
+        
+        // Add specific payment details based on method
+        if ($request->payment_method === 'Cheque') {
+            $paymentRecord['reference'] = $request->cheq_no;
+            $paymentRecord['details'] = [
+                'cheq_no' => $request->cheq_no,
+                'cheq_date' => $request->cheq_date,
+                'bank_account_id' => $request->bank_account_id,
+                'bank_name' => $request->bank_name
+            ];
+        } elseif ($request->payment_method === 'Bank Transfer') {
+            $paymentRecord['reference'] = $request->transfer_reference_no;
+            $paymentRecord['details'] = [
+                'transfer_reference_no' => $request->transfer_reference_no,
+                'transfer_date' => $request->transfer_date,
+                'transfer_notes' => $request->transfer_notes,
+                'bank_account_id' => $request->bank_account_id,
+                'bank_name' => $request->bank_name
+            ];
+        } elseif ($request->payment_method === 'bag_to_box') {
+            $adjustmentAmount = ((int)$request->bag_count * (float)$request->bag_value) - ((int)$request->box_count * (float)$request->box_value);
+            $paymentRecord['reference'] = "{$request->bag_count} bags to {$request->box_count} boxes";
+            $paymentRecord['details'] = [
+                'bag_count' => (int)$request->bag_count,
+                'box_count' => (int)$request->box_count,
+                'bag_value' => (float)$request->bag_value,
+                'box_value' => (float)$request->box_value,
+                'adjustment_amount' => $adjustmentAmount
+            ];
+        } elseif ($request->payment_method === 'bill_to_bill') {
+            $paymentRecord['reference'] = $request->target_bill_no;
+            $paymentRecord['details'] = [
+                'target_customer_code' => $request->target_customer_code,
+                'target_bill_no' => $request->target_bill_no,
+                'target_bill_value' => (float)$request->target_bill_value,
+                'target_supplier_code' => $request->target_supplier_code,
+                'target_supplier_bill_no' => $request->target_supplier_bill_no,
+                'target_supplier_bill_value' => (float)$request->target_supplier_bill_value
+            ];
+        } elseif ($request->payment_method === 'bad_debt') {
+            $paymentRecord['reference'] = $request->bad_debt_name;
+            $paymentRecord['details'] = [
+                'bad_debt_name' => $request->bad_debt_name,
+                'bad_debt_amount' => (float)$request->bad_debt_amount
+            ];
+        } else { // Cash
+            $paymentRecord['reference'] = 'Cash';
+            $paymentRecord['details'] = [];
+        }
+        
+        // Add to payment history array
+        $paymentHistory[] = $paymentRecord;
+        
+        // Build update data for sales table
         $updateData = [
-            'given_amount' => $request->given_amount ?? 0,
+            'given_amount' => $newTotal,
             'given_amount_applied' => $request->given_amount_applied,
             'credit_transaction' => $request->credit_transaction ?? 'N',
-            'payment_adjustment_type' => $paymentAdjustmentType,
-            'adjustment_amount' => $request->given_amount ?? 0,
+            'payment_adjustment_type' => $request->payment_method,
+            'adjustment_amount' => $paymentAmount,
+            'payment_history' => json_encode($paymentHistory),
             'updated_at' => now()
         ];
 
-        // Handle Bank Transfer
-        if ($paymentAdjustmentType === 'Bank Transfer') {
+        // Add latest payment details to main columns for quick reference (optional)
+        if ($request->payment_method === 'Bank Transfer') {
             if ($request->has('bank_account_id') && $request->bank_account_id) {
                 $updateData['bank_account_id'] = $request->bank_account_id;
                 $bank = Bank::find($request->bank_account_id);
@@ -1257,44 +1361,40 @@ public function updateGivenAmountApplied(Request $request)
                     $updateData['bank_name'] = $bank->bank_name;
                 }
             }
-            if ($request->has('transfer_reference_no')) {
-                $updateData['transfer_reference_no'] = $request->transfer_reference_no;
-            }
-            if ($request->has('transfer_date')) {
-                $updateData['transfer_date'] = $request->transfer_date;
-            }
-            if ($request->has('transfer_notes')) {
-                $updateData['transfer_notes'] = $request->transfer_notes;
-            }
-            // Clear cheque fields
+            $updateData['transfer_reference_no'] = $request->transfer_reference_no;
+            $updateData['transfer_date'] = $request->transfer_date;
+            $updateData['transfer_notes'] = $request->transfer_notes;
             $updateData['cheq_date'] = null;
             $updateData['cheq_no'] = null;
-        }
-        // Handle Cheque
-        elseif ($paymentAdjustmentType === 'Cheque') {
-            if ($request->has('cheq_date') && $request->cheq_date) {
-                $updateData['cheq_date'] = $request->cheq_date;
-            }
-            if ($request->has('cheq_no') && $request->cheq_no) {
-                $updateData['cheq_no'] = $request->cheq_no;
-            }
+        } elseif ($request->payment_method === 'Cheque') {
+            $updateData['cheq_date'] = $request->cheq_date;
+            $updateData['cheq_no'] = $request->cheq_no;
             if ($request->has('bank_account_id') && $request->bank_account_id) {
                 $updateData['bank_account_id'] = $request->bank_account_id;
                 $bank = Bank::find($request->bank_account_id);
                 if ($bank) {
                     $updateData['bank_name'] = $bank->bank_name;
                 }
-            } elseif ($request->has('bank_name')) {
-                $updateData['bank_name'] = $request->bank_name;
             }
-            // Clear transfer fields
             $updateData['transfer_reference_no'] = null;
             $updateData['transfer_date'] = null;
             $updateData['transfer_notes'] = null;
-        } 
-        // Handle Cash
-        else {
-            // Clear both cheque and transfer fields
+        } elseif ($request->payment_method === 'bag_to_box') {
+            $updateData['bag_count'] = $request->bag_count;
+            $updateData['box_count'] = $request->box_count;
+            $updateData['bag_value'] = $request->bag_value;
+            $updateData['box_value'] = $request->box_value;
+        } elseif ($request->payment_method === 'bill_to_bill') {
+            $updateData['target_customer_code'] = $request->target_customer_code;
+            $updateData['target_bill_no'] = $request->target_bill_no;
+            $updateData['target_bill_value'] = $request->target_bill_value;
+            $updateData['target_supplier_code'] = $request->target_supplier_code;
+            $updateData['target_supplier_bill_no'] = $request->target_supplier_bill_no;
+            $updateData['target_supplier_bill_value'] = $request->target_supplier_bill_value;
+        } elseif ($request->payment_method === 'bad_debt') {
+            $updateData['bad_debt_name'] = $request->bad_debt_name;
+            $updateData['bad_debt_amount'] = $request->bad_debt_amount;
+        } else { // Cash
             $updateData['cheq_date'] = null;
             $updateData['cheq_no'] = null;
             $updateData['bank_account_id'] = null;
@@ -1303,51 +1403,47 @@ public function updateGivenAmountApplied(Request $request)
             $updateData['transfer_notes'] = null;
         }
 
-        // Update all sales in the bill
+        // Update the sales record
         $updated = DB::table('sales')
             ->where('bill_no', $request->bill_no)
             ->where('bill_printed', 'Y')
             ->update($updateData);
 
         if ($updated === 0) {
+            DB::rollBack();
             return response()->json([
                 'success' => false,
-                'message' => 'No sales found with this bill_no',
+                'message' => 'Failed to update sales record',
                 'bill_no' => $request->bill_no
             ], 404);
         }
 
-        // Get bank name for response if needed
-        $bankName = null;
-        if ($paymentAdjustmentType === 'Bank Transfer' && isset($updateData['bank_name'])) {
-            $bankName = $updateData['bank_name'];
-        } elseif ($paymentAdjustmentType === 'Cheque' && isset($updateData['bank_name'])) {
-            $bankName = $updateData['bank_name'];
-        }
+        DB::commit();
 
         return response()->json([
             'success' => true,
-            'message' => "Successfully updated {$updated} record(s) with {$paymentAdjustmentType} payment",
+            'message' => "Successfully updated with {$request->payment_method} payment",
             'data' => [
                 'bill_no' => $request->bill_no,
-                'given_amount' => $request->given_amount,
+                'given_amount' => $newTotal,
                 'given_amount_applied' => $request->given_amount_applied,
-                'credit_transaction' => $request->credit_transaction ?? 'N',
-                'payment_adjustment_type' => $paymentAdjustmentType,
-                'bank_name' => $bankName,
-                'cheq_date' => $request->cheq_date ?? null,
-                'cheq_no' => $request->cheq_no ?? null,
-                'transfer_reference_no' => $request->transfer_reference_no ?? null,
-                'transfer_date' => $request->transfer_date ?? null,
+                'payment_method' => $request->payment_method,
+                'payment_history' => $paymentHistory,
                 'affected_rows' => $updated
             ]
         ]);
 
     } catch (\Exception $e) {
-        \Log::error('Error updating given amount applied:', ['error' => $e->getMessage()]);
+        DB::rollBack();
+        \Log::error('Error updating given amount applied:', [
+            'error' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'trace' => $e->getTraceAsString()
+        ]);
         return response()->json([
             'success' => false,
-            'message' => 'Internal server error',
+            'message' => 'Internal server error: ' . $e->getMessage(),
             'error' => $e->getMessage()
         ], 500);
     }
@@ -1661,59 +1757,72 @@ public function applyPaymentAdjustment(Request $request)
 public function getPaymentHistory($billNo)
 {
     try {
-        $sales = Sale::where('bill_no', $billNo)
+        $sale = DB::table('sales')
+            ->where('bill_no', $billNo)
             ->where('bill_printed', 'Y')
-            ->orderBy('created_at', 'asc')
-            ->get();
+            ->first();
         
-        $payments = [];
-        $runningGivenAmount = 0;
+        if (!$sale) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Bill not found'
+            ], 404);
+        }
         
-        foreach ($sales as $sale) {
-            // Track cumulative given amount to identify individual payments
-            if ($sale->given_amount > $runningGivenAmount) {
-                $paymentAmount = $sale->given_amount - $runningGivenAmount;
-                $runningGivenAmount = $sale->given_amount;
-                
-                $paymentMethod = $sale->payment_adjustment_type ?? 'Cash';
-                $reference = null;
-                
-                if ($sale->cheq_no) {
-                    $reference = $sale->cheq_no;
-                } elseif ($sale->transfer_reference_no) {
-                    $reference = $sale->transfer_reference_no;
-                } elseif ($paymentMethod === 'bag_to_box') {
-                    $reference = "{$sale->bag_count} bags → {$sale->box_count} boxes";
-                } elseif ($paymentMethod === 'bill_to_bill') {
-                    $reference = "Bill #{$sale->target_bill_no}";
-                } elseif ($paymentMethod === 'bad_debt') {
-                    $reference = $sale->bad_debt_name;
-                }
-                
-                $payments[] = [
-                    'date' => $sale->created_at,
-                    'amount' => $paymentAmount,
-                    'method' => $paymentMethod,
-                    'reference' => $reference,
-                    'cheq_no' => $sale->cheq_no,
-                    'transfer_reference_no' => $sale->transfer_reference_no,
-                    'bank_name' => $sale->bank_name
-                ];
+        // Get payment history - handle both string and array cases
+        $paymentHistory = [];
+        if ($sale->payment_history) {
+            if (is_string($sale->payment_history)) {
+                $paymentHistory = json_decode($sale->payment_history, true) ?: [];
+            } elseif (is_array($sale->payment_history)) {
+                $paymentHistory = $sale->payment_history;
             }
         }
         
+        // Calculate totals
+        $totalPaid = (float)($sale->given_amount ?? 0);
+        $totalBill = 0;
+        
+        // Get total bill amount from sales table
+        $totalBillRecords = DB::table('sales')
+            ->where('bill_no', $billNo)
+            ->where('bill_printed', 'Y')
+            ->select(DB::raw('SUM(total + (packs * CustomerPackCost)) as total'))
+            ->first();
+        
+        if ($totalBillRecords) {
+            $totalBill = (float)($totalBillRecords->total ?? 0);
+        }
+        
+        $remaining = max(0, $totalBill - $totalPaid);
+        
+        // Format payments for display
+        $formattedPayments = array_map(function($payment) {
+            return [
+                'date' => $payment['date'],
+                'amount' => (float)$payment['amount'],
+                'method' => $payment['method'],
+                'reference' => $payment['reference'] ?? null,
+                'running_balance' => $payment['running_balance'] ?? null,
+                'is_fully_paid' => $payment['is_fully_paid'] ?? false,
+                'details' => $payment['details'] ?? []
+            ];
+        }, $paymentHistory);
+        
         return response()->json([
             'success' => true,
-            'payments' => $payments
+            'payments' => $formattedPayments,
+            'total_paid' => $totalPaid,
+            'total_bill' => $totalBill,
+            'remaining' => $remaining
         ]);
         
     } catch (\Exception $e) {
-        Log::error('Failed to fetch payment history: ' . $e->getMessage());
+        \Log::error('Failed to fetch payment history: ' . $e->getMessage());
         return response()->json([
             'success' => false,
-            'message' => 'Failed to fetch payment history'
+            'message' => 'Failed to fetch payment history: ' . $e->getMessage()
         ], 500);
     }
 }
-
 }

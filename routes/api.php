@@ -34,6 +34,21 @@ Route::get('/items/options', [CommissionController::class, 'getItemOptions']);
 // ----------------------------------------------------------------------
 Route::middleware('auth:sanctum')->group(function () {
 
+    // ==================== USER ROUTE (GET CURRENT USER) ====================
+    Route::get('/user', function (Request $request) {
+        $user = $request->user();
+        return response()->json([
+            'success' => true,
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'role' => $user->role,
+                'user_id' => $user->user_id
+            ]
+        ]);
+    });
+
     // CUSTOMERS
     Route::get('/suppliers/loan-summary', [SupplierLoanController::class, 'getLoanTakenSummary']);
     Route::get('/customers', [CustomerController::class, 'apiIndex']);
@@ -116,18 +131,15 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // routes/api.php
     Route::get('/settings', function () {
-        // We fetch the first record. 
-        // If you have multiple keys, use: Setting::where('key', 'your_key')->first();
         $setting = Setting::first();
 
         if (!$setting) {
             return response()->json(['value' => 'No Data'], 404);
         }
 
-        // Return the whole object or just the value column
         return response()->json([
             'value' => $setting->value,
-            'company' => $setting->CompanyName, // Optional: if you need it later
+            'company' => $setting->CompanyName,
         ]);
     });
 
@@ -143,18 +155,22 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/sales/update-given-amount-applied', [SalesEntryController::class, 'updateGivenAmountApplied'])
         ->name('sales.update-given-amount-applied');
     
+    // Payment History Route
+    Route::get('/sales/payment-history/{billNo}', [SalesEntryController::class, 'getPaymentHistory'])
+        ->name('sales.payment-history');
+    
     // This is the specific route for updating given amount - MUST come before /sales/{sale}
     Route::put('/sales/{saleId}/given-amount', [SalesEntryController::class, 'updateSaleGivenAmount'])
         ->name('sales.update-sale-given-amount')
-        ->where('saleId', '[0-9]+'); // Only match numeric IDs
+        ->where('saleId', '[0-9]+');
     
     // Regular CRUD routes - MORE GENERAL PATTERNS LAST
-    Route::get('/sales', [SalesEntryController::class, 'index']); // This will NOT conflict with /sales/all
+    Route::get('/sales', [SalesEntryController::class, 'index']);
     Route::post('/sales', [SalesEntryController::class, 'store']);
     Route::put('/sales/{sale}', [SalesEntryController::class, 'update'])
-        ->where('sale', '[0-9]+'); // Only match numeric IDs
+        ->where('sale', '[0-9]+');
     Route::delete('/sales/{sale}', [SalesEntryController::class, 'destroy'])
-        ->where('sale', '[0-9]+'); // Only match numeric IDs
+        ->where('sale', '[0-9]+');
     
     Route::post('/sales/mark-printed', [SalesEntryController::class, 'markAsPrinted']);
     Route::post('/sales/mark-all-processed', [SalesEntryController::class, 'markAllAsProcessed']);
@@ -181,20 +197,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/sales/process-day', [SalesEntryController::class, 'processDay']);
 
     //loan section
-    Route::get('/customers-loans/data', [CustomersLoanController::class, 'getInitialData']); // NEW: For Customers, GRN Codes
-    Route::get('/customers-loans/index', [CustomersLoanController::class, 'index']); // Get today's loans
+    Route::get('/customers-loans/data', [CustomersLoanController::class, 'getInitialData']);
+    Route::get('/customers-loans/index', [CustomersLoanController::class, 'index']);
 
-    // Loan CRUD (using the existing methods)
+    // Loan CRUD
     Route::post('/customers-loans', [CustomersLoanController::class, 'store']);
-    // Note: React will use POST with _method=PUT to hit this route
     Route::post('/customers-loans/{id}', [CustomersLoanController::class, 'updateApi']); 
     Route::delete('/customers-loans/{id}', [CustomersLoanController::class, 'destroy']);
 
     // Utility Endpoints
     Route::get('/customers/{customerId}/loans-total', [CustomersLoanController::class, 'getTotalLoanAmount']); 
-    Route::post('/settings/updateBalance', [CustomersLoanController::class, 'updateBalance']); // Assuming you'll add this method
-    Route::get('/api/grn-entry/{code}', [CustomersLoanController::class, 'getGrnEntry']); // NEW: For item code autofill
-    Route::get('/api/all-bill-nos', [CustomersLoanController::class, 'getAllBillNos']); // NEW: For bill no dropdown
+    Route::post('/settings/updateBalance', [CustomersLoanController::class, 'updateBalance']);
+    Route::get('/api/grn-entry/{code}', [CustomersLoanController::class, 'getGrnEntry']);
+    Route::get('/api/all-bill-nos', [CustomersLoanController::class, 'getAllBillNos']);
     Route::put('/customers-loans/{id}', [CustomersLoanController::class, 'update']);
     
     //loans
@@ -202,14 +217,12 @@ Route::middleware('auth:sanctum')->group(function () {
     
     //update given amount
     Route::get('/sales/customer/given-amount/{customerCode}', function($customerCode) {
-        // Get all sales for this customer with non-null given_amount, ordered by bill_no and updated_at
         $sales = \App\Models\Sale::where('customer_code', $customerCode)
             ->whereNotNull('given_amount')
             ->orderBy('bill_no', 'asc')
             ->orderBy('updated_at', 'desc')
             ->get();
         
-        // Group by bill_no to get the latest given_amount for each bill
         $billAmounts = [];
         foreach ($sales as $sale) {
             if (!isset($billAmounts[$sale->bill_no])) {
@@ -217,7 +230,6 @@ Route::middleware('auth:sanctum')->group(function () {
             }
         }
         
-        // Or if you want all entries separately without grouping by latest
         $allEntries = $sales->map(function($sale) {
             return [
                 'bill_no' => $sale->bill_no,
@@ -230,8 +242,8 @@ Route::middleware('auth:sanctum')->group(function () {
             'success' => true,
             'customer_code' => $customerCode,
             'latest_given_amount' => $sales->first() ? $sales->first()->given_amount : null,
-            'by_bill_no' => $billAmounts, // Latest given_amount per bill_no
-            'all_entries' => $allEntries // All entries with their bill_no
+            'by_bill_no' => $billAmounts,
+            'all_entries' => $allEntries
         ]);
     });
     
@@ -257,7 +269,6 @@ Route::get('/reports/sales-summary', [ReportController::class, 'getSalesSummary'
 Route::get('/reports/bill-details/{billNo}/{customerCode}', [ReportController::class, 'getBillDetails']);
 
 //new farmer report
-// FARMER (SUPPLIER) REPORT ROUTES
 Route::get('/reports/farmers-summary', [ReportController::class, 'getFarmersSummary']);
 Route::get('/reports/farmer-bill-details/{billNo}/{supplierCode}', [ReportController::class, 'getFarmerBillDetails']);
 
@@ -295,9 +306,9 @@ Route::prefix('supplier-loan')->group(function () {
 // Farmer Loan Routes
 Route::prefix('farmer-loans')->group(function () {
     Route::post('/', [FarmerLoanController::class, 'store']);
-    Route::get('/data', [FarmerLoanController::class, 'getLoansData']);  // Changed from getTodayLoans
-    Route::get('/all', [FarmerLoanController::class, 'getLoansData']);    // With ?all=true parameter
-    Route::get('/{id}', [FarmerLoanController::class, 'getLoan']);         // Get single loan
+    Route::get('/data', [FarmerLoanController::class, 'getLoansData']);
+    Route::get('/all', [FarmerLoanController::class, 'getLoansData']);
+    Route::get('/{id}', [FarmerLoanController::class, 'getLoan']);
     Route::put('/{id}', [FarmerLoanController::class, 'update']);
     Route::delete('/{id}', [FarmerLoanController::class, 'destroy']);
     Route::get('/balance/{supplier_code}', [FarmerLoanController::class, 'getFarmerBalance']);
@@ -319,12 +330,9 @@ Route::prefix('banks')->group(function () {
     Route::delete('/{id}', [BankController::class, 'destroy']);
 });
 
-// Bank account dashboard and reports - IMPORTANT: 'all' route comes BEFORE parameterized routes
+// Bank account dashboard and reports
 Route::prefix('bank-accounts')->group(function () {
-    // Dashboard and overview
     Route::get('/dashboard', [BankController::class, 'dashboard']);
-    
-    // Transactions
     Route::get('/transactions', [BankController::class, 'getTransactions']);
     Route::get('/transactions/{id}', [BankController::class, 'getTransaction']);
     
@@ -332,10 +340,7 @@ Route::prefix('bank-accounts')->group(function () {
     Route::get('/statement/all', [BankController::class, 'getAllAccountsStatement']);
     Route::get('/statement/{bankAccountId}', [BankController::class, 'getStatement']);
     
-    // Balance
     Route::get('/balance/{bankAccountId}', [BankController::class, 'getBalance']);
-    
-    // Reports
     Route::get('/cheques', [BankController::class, 'getChequeReport']);
     Route::get('/bank-transfers', [BankController::class, 'getBankTransferReport']);
     Route::get('/monthly-summary', [BankController::class, 'getMonthlySummary']);
@@ -355,5 +360,3 @@ Route::post('/adjustments/apply', [SalesEntryController::class, 'applyPaymentAdj
 
 // Update given amount applied route
 Route::put('/sales/update-given-amount-applied', [SalesEntryController::class, 'updateGivenAmountApplied']);
-// Add this route inside the auth middleware group
-Route::get('/sales/payment-history/{billNo}', [SalesEntryController::class, 'getPaymentHistory']);
