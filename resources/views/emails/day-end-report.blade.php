@@ -1,11 +1,13 @@
 <x-mail::message>
 
-# **Daily Sales Summary Report**
+# **Daily Sales & Payment Collection Report**
 ---
 
 <div style="font-size: 15px; color:#4a4a4a; line-height:1.6;">
     <strong>Date Processed:</strong> {{ $reportData['processLogDate'] }}<br>
-    මෙම ලේඛනය සාරාංශ කරන්නේ දෛනික විකුණුම් මෙහෙයුම්, තොග චලන, සහ පද්ධතිය තුළ වාර්තා කරන ලද සංශෝධන ලොග් සටහන්.
+    <strong>Generated on:</strong> {{ now()->format('Y-m-d H:i:s') }}<br>
+    <strong>Total Records Processed:</strong> {{ $reportData['totalRecordsMoved'] }}<br>
+    මෙම ලේඛනය සාරාංශ කරන්නේ දෛනික විකුණුම් මෙහෙයුම්, ගෙවීම් එකතු කිරීම්, තොග චලන, සහ පද්ධතිය තුළ වාර්තා කරන ලද සංශෝධන ලොග් සටහන්.
 </div>
 
 ---
@@ -83,7 +85,7 @@ $statusColor = $adj->type === 'original' ? '#0a6b28' : ($adj->type === 'updated'
 
 ---
 
-# **5. සැපයුම්කරු අනුව වාර්තාව (Supplier Report)**
+## **5. සැපයුම්කරු අනුව වාර්තාව (Supplier Report)**
 
 @foreach ($reportData['supplier_report'] as $supplierCode => $records)
 
@@ -105,6 +107,90 @@ $statusColor = $adj->type === 'original' ? '#0a6b28' : ($adj->type === 'updated'
 </div>
 
 @endforeach
+
+---
+
+## **6. Payment Collection Report (ගෙවීම් එකතු කිරීමේ වාර්තාව)**
+
+<div style="background:#f0fdf4; padding:15px; border-radius:8px; margin:20px 0;">
+    <h3 style="margin:0 0 10px 0;">📊 Payment Summary Statistics</h3>
+    <table style="width:100%; border-collapse:collapse;">
+        <tr style="border-bottom:1px solid #ddd;">
+            <td style="padding:8px;"><strong>💰 Cash Collection:</strong></td>
+            <td style="padding:8px; text-align:right;"><strong style="color:#10b981;">Rs {{ number_format($reportData['payment_totals']['cash_collection'] ?? 0, 2) }}</strong></td>
+        </tr>
+        <tr style="border-bottom:1px solid #ddd;">
+            <td style="padding:8px;"><strong>💳 Cheques Collection:</strong></td>
+            <td style="padding:8px; text-align:right;"><strong style="color:#8b5cf6;">Rs {{ number_format($reportData['payment_totals']['cheques_collection'] ?? 0, 2) }}</strong></td>
+         </tr>
+        <tr style="border-bottom:1px solid #ddd;">
+            <td style="padding:8px;"><strong>📦 Bag/Box Total:</strong></td>
+            <td style="padding:8px; text-align:right;"><strong style="color:#f59e0b;">Rs {{ number_format($reportData['payment_totals']['bag_box_total'] ?? 0, 2) }}</strong></td>
+         </tr>
+        <tr style="border-bottom:1px solid #ddd;">
+            <td style="padding:8px;"><strong>🏦 Bank Transfer:</strong></td>
+            <td style="padding:8px; text-align:right;"><strong style="color:#ec489a;">Rs {{ number_format($reportData['payment_totals']['banks_transfer'] ?? 0, 2) }}</strong></td>
+         </tr>
+        <tr style="border-bottom:1px solid #ddd;">
+            <td style="padding:8px;"><strong>⚠️ Bad Debt:</strong></td>
+            <td style="padding:8px; text-align:right;"><strong style="color:#ef4444;">Rs {{ number_format($reportData['payment_totals']['bad_debt'] ?? 0, 2) }}</strong></td>
+         </tr>
+    </table>     
+     <div style="margin-top:10px; background:#fef3c7; padding:10px; border-radius:6px; text-align:center;">
+         <strong>Grand Total Collected:</strong> 
+         Rs {{ number_format(
+             ($reportData['payment_totals']['cash_collection'] ?? 0) + 
+             ($reportData['payment_totals']['cheques_collection'] ?? 0) + 
+             ($reportData['payment_totals']['bag_box_total'] ?? 0) + 
+             ($reportData['payment_totals']['banks_transfer'] ?? 0), 2) }}
+     </div>
+</div>
+
+### **Detailed Payment Collection by Bill**
+
+<x-mail::table>
+| Customer/Bill No | Cash | Cheques | Bag/Box | Bags | Boxes | Bank Transfer | Bad Debt |
+|:--- |:---: |:---: |:---: |:---: |:---: |:---: |:---: |
+@foreach($reportData['payment_data'] as $row)
+| {{ $row['customer_bill_no'] }} | Rs {{ number_format($row['cash_collection'], 2) }} | Rs {{ number_format($row['cheques_collection'], 2) }} | Rs {{ number_format($row['bag_box_total'], 2) }} | {{ $row['bag_total'] }} | {{ $row['box_total'] }} | Rs {{ number_format($row['banks_transfer'], 2) }} | Rs {{ number_format($row['bad_debt'], 2) }} |
+@endforeach
+| **TOTAL** | **Rs {{ number_format($reportData['payment_totals']['cash_collection'] ?? 0, 2) }}** | **Rs {{ number_format($reportData['payment_totals']['cheques_collection'] ?? 0, 2) }}** | **Rs {{ number_format($reportData['payment_totals']['bag_box_total'] ?? 0, 2) }}** | **{{ number_format($reportData['payment_totals']['bag_total'] ?? 0) }}** | **{{ number_format($reportData['payment_totals']['box_total'] ?? 0) }}** | **Rs {{ number_format($reportData['payment_totals']['banks_transfer'] ?? 0, 2) }}** | **Rs {{ number_format($reportData['payment_totals']['bad_debt'] ?? 0, 2) }}** |
+</x-mail::table>
+
+<div style="margin-top:20px;">
+    <p><strong>Total Bills Processed:</strong> {{ count($reportData['payment_data']) }}</p>
+</div>
+
+---
+
+## **7. Report Summary**
+
+<div style="background:#e0e7ff; padding:15px; border-radius:8px; margin-top:20px;">
+    <table style="width:100%;">
+        <tr>
+            <td style="padding:5px;"><strong>Total Sales Amount:</strong></td>
+            <td style="padding:5px; text-align:right;">Rs {{ number_format($reportData['totals']['total_net_total'] ?? 0, 2) }}</td>
+        </tr>
+        <tr>
+            <td style="padding:5px;"><strong>Total Payment Collected:</strong></td>
+            <td style="padding:5px; text-align:right;">Rs {{ number_format(
+                ($reportData['payment_totals']['cash_collection'] ?? 0) + 
+                ($reportData['payment_totals']['cheques_collection'] ?? 0) + 
+                ($reportData['payment_totals']['bag_box_total'] ?? 0) + 
+                ($reportData['payment_totals']['banks_transfer'] ?? 0), 2) }}</td>
+        </tr>
+        <tr>
+            <td style="padding:5px;"><strong>Total Outstanding:</strong></td>
+            <td style="padding:5px; text-align:right; color:#ef4444;">
+                Rs {{ number_format(($reportData['totals']['total_net_total'] ?? 0) - 
+                    (($reportData['payment_totals']['cash_collection'] ?? 0) + 
+                     ($reportData['payment_totals']['cheques_collection'] ?? 0) + 
+                     ($reportData['payment_totals']['bag_box_total'] ?? 0) + 
+                     ($reportData['payment_totals']['banks_transfer'] ?? 0)), 2) }}
+            </td>
+        </tr>
+    </table>
+</div>
 
 <br><br>
 

@@ -72,4 +72,8 @@ class User extends Authenticatable
         // Return the user_id value for authentication
         return $this->attributes['user_id'] ?? $this->attributes['id'];
     }
+    public function incomeExpenses()
+{
+    return $this->hasMany(IncomeExpenses::class, 'user_id', 'user_id');
+}
 }

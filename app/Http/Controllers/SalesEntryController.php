@@ -9,6 +9,8 @@ use App\Models\Supplier;
 use App\Models\Sale;
 use App\Models\Item;
 use App\Models\Customer;
+use App\Models\SupplierLoan;
+use App\Models\SupplierLoanHistory;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log; // Make sure Log is imported
@@ -22,6 +24,7 @@ use App\Models\Commission;
 use Illuminate\Support\Str;
 use Twilio\Rest\Client;
 use TextLK\SMS\TextLKSMSMessage;
+use Illuminate\Support\Facades\Mail;
 /* 
     SalesEntryController handles CRUD operations for sales entries,
     including complex logic for commission calculation, price updates,
@@ -1017,161 +1020,284 @@ class SalesEntryController extends Controller
             'sale' => $sale->fresh() // .fresh() ensures you return the latest DB state
         ]);
     }
-    public function processDay(Request $request)
-    {
-        $recipientEmail = 'nethmavilhan@gmail.com';
+public function processDay(Request $request)
+{
+    $recipientEmails = ['nethmavilhan@gmail.com', 'thrcorner@gmail.com'];
 
-        // ✅ Use selected date from frontend
-        $processLogDate = $request->input('date') ?? now()->toDateString();
+    // Use selected date from frontend
+    $processLogDate = $request->input('date') ?? now()->toDateString();
+    $startDate = $request->input('start_date', $processLogDate);
+    $endDate = $request->input('end_date', $processLogDate);
 
-        // ✅ Get last stored date from settings.value (ONLY for adjustments)
-        $lastSetting = \App\Models\Setting::where('key', 'last_day_started_date')->first();
-        $adjustmentDate = $lastSetting ? $lastSetting->value : $processLogDate;
+    // Get last stored date from settings.value (ONLY for adjustments)
+    $lastSetting = Setting::where('key', 'last_day_started_date')->first();
+    $adjustmentDate = $lastSetting ? $lastSetting->value : $processLogDate;
 
-        // 1️⃣ Fetch Current Sales
-        $allSales = Sale::all();
-        $totalRecordsToMove = $allSales->count();
+    // 1️⃣ Fetch Current Sales
+    $allSales = Sale::where('bill_printed', 'Y')
+        ->whereNotNull('bill_no')
+        ->where('bill_no', '!=', '')
+        ->get();
+    
+    $totalRecordsToMove = $allSales->count();
 
-        if ($totalRecordsToMove === 0) {
-            return response()->json([
-                'success' => false,
-                'message' => "Sales table is empty."
-            ], 404);
-        }
+    if ($totalRecordsToMove === 0) {
+        return response()->json([
+            'success' => false,
+            'message' => "Sales table is empty."
+        ], 404);
+    }
 
-        // 2️⃣ Fetch Adjustments using PREVIOUS stored date
-        $adjustments = Salesadjustment::whereDate('Date', $adjustmentDate)
-            ->orderBy('created_at', 'desc')
-            ->get();
+    // 2️⃣ Fetch Adjustments using PREVIOUS stored date
+    $adjustments = Salesadjustment::whereDate('Date', $adjustmentDate)
+        ->orderBy('created_at', 'desc')
+        ->get();
 
-        Supplier::whereDate('advance_created_date', $processLogDate)
-            ->update([
-                'advance_amount' => 0,
-                'advance_created_date' => null
-            ]);
+    Supplier::whereDate('advance_created_date', $processLogDate)
+        ->update([
+            'advance_amount' => 0,
+            'advance_created_date' => null
+        ]);
 
-        // 3️⃣ Summarize Sales
-        $summarizedSales = Sale::selectRaw("
-        item_code, item_name,
+    // 3️⃣ Fetch Supplier Loans to move
+    $supplierLoans = SupplierLoan::all();
+
+    // 3️⃣ Summarize Sales
+    $summarizedSales = Sale::selectRaw("
+        item_code, 
+        item_name,
         SUM(packs) AS packs,
         SUM(weight) AS weight,
         SUM(total) AS total
     ")
-            ->groupBy('item_code', 'item_name')
-            ->orderBy('item_name', 'asc')
-            ->get();
+        ->where('bill_printed', 'Y')
+        ->whereNotNull('bill_no')
+        ->groupBy('item_code', 'item_name')
+        ->orderBy('item_name', 'asc')
+        ->get();
 
-        // Add pack_due
-        $summarizedSales = $summarizedSales->map(function ($sale) {
-            $item = \App\Models\Item::where('no', $sale->item_code)->first();
-            $sale->pack_due = $item ? $item->pack_due : 0;
-            return $sale;
-        });
+    // Add pack_due
+    $summarizedSales = $summarizedSales->map(function ($sale) {
+        $item = Item::where('no', $sale->item_code)->first();
+        $sale->pack_cost = $item ? $item->pack_due : 0;
+        return $sale;
+    });
 
-        // 4️⃣ Group Sales by Customer → Bill
-        $groupedSales = $allSales->groupBy('customer_code')->map(function ($customerSales) {
-            return $customerSales->groupBy('bill_no');
-        });
+    // 4️⃣ Group Sales by Customer → Bill
+    $groupedSales = $allSales->groupBy('customer_code')->map(function ($customerSales) {
+        return $customerSales->groupBy('bill_no');
+    });
 
-        // 5️⃣ Supplier Report
-        $supplierReport = \App\Models\Sale::select([
-            'supplier_code',
-            'customer_code',
-            'item_code',
-            'item_name',
-            'SupplierWeight',
-            'SupplierPricePerKg',
-            'SupplierTotal',
-            'SupplierPackCost',
-            'SupplierPackLabour',
-            'profit',
-            'supplier_bill_printed',
-            'supplier_bill_no',
-            'Date'
-        ])
-            ->orderBy('Date', 'desc')
-            ->get()
-            ->groupBy('supplier_code');
+    // 5️⃣ Supplier Report
+    $supplierReport = Sale::select([
+        'supplier_code',
+        'customer_code',
+        'item_code',
+        'item_name',
+        'SupplierWeight',
+        'SupplierPricePerKg',
+        'SupplierTotal',
+        'SupplierPackCost',
+        'SupplierPackLabour',
+        'profit',
+        'supplier_bill_printed',
+        'supplier_bill_no',
+        'Date',
+        'created_at'
+    ])
+        ->where('bill_printed', 'Y')
+        ->whereNotNull('supplier_code')
+        ->orderBy('Date', 'desc')
+        ->get()
+        ->groupBy('supplier_code');
 
-        // Totals
-        $totals = $summarizedSales->reduce(function ($acc, $sale) {
-            $acc['total_weight'] += (float) $sale->weight;
-            $acc['total_net_total'] += ((float) $sale->total - ((float) $sale->packs * (float) $sale->pack_due));
-            return $acc;
-        }, [
-            'total_weight' => 0.0,
-            'total_net_total' => 0.0
-        ]);
+    // Totals for sales report
+    $totals = $summarizedSales->reduce(function ($acc, $sale) {
+        $acc['total_weight'] += (float) $sale->weight;
+        $acc['total_net_total'] += ((float) $sale->total - ((float) $sale->packs * (float) $sale->pack_cost));
+        return $acc;
+    }, [
+        'total_weight' => 0.0,
+        'total_net_total' => 0.0
+    ]);
 
-        // Email Data
-        $reportData = [
-            'processLogDate' => $processLogDate,
-            'adjustmentDate' => $adjustmentDate,
-            'totalRecordsMoved' => $totalRecordsToMove,
-            'sales' => $summarizedSales,
-            'raw_sales' => $allSales,
-            'grouped_sales' => $groupedSales,
-            'adjustments' => $adjustments,
-            'supplier_report' => $supplierReport,
-            'totals' => $totals,
-        ];
-
-        \DB::beginTransaction();
-
-        try {
-
-            // Move Sales → SalesHistory
-            $historyData = [];
-            $allowedColumns = (new \App\Models\Sale())->getFillable();
-
-            foreach ($allSales as $sale) {
-                $data = $sale->only($allowedColumns);
-                unset($data['id']);
-                $data['bag_real_weight'] = $sale->bag_real_weight ?? 0;
-
-                foreach ($data as $key => $value) {
-                    if (is_array($value)) {
-                        $data[$key] = json_encode($value);
-                    }
-                }
-
-                $historyData[] = $data;
-            }
-
-            \App\Models\SalesHistory::insert($historyData);
-            \App\Models\Sale::query()->delete();
-
-            // ✅ SAVE SELECTED DATE TO SETTINGS
-            \App\Models\Setting::updateOrCreate(
-                ['key' => 'last_day_started_date'],
-                ['value' => $processLogDate]
-            );
-
-            \DB::commit();
-
-            // Send Email
-            try {
-                \Mail::to($recipientEmail)->send(new DayEndWeightReportMail($reportData));
-            } catch (\Exception $e) {
-                \Log::error("Mail Error: " . $e->getMessage());
-            }
-
-            return response()->json([
-                'success' => true,
-                'message' => "Process complete. Reports emailed.",
-                'adjustment_date_used' => $adjustmentDate,
-                'saved_date' => $processLogDate
-            ]);
-
-        } catch (\Exception $e) {
-            \DB::rollBack();
-
-            return response()->json([
-                'success' => false,
-                'message' => $e->getMessage()
-            ], 500);
+    // ========== PAYMENT COLLECTION REPORT DATA ==========
+    // Group by customer_code and bill_no for payment report
+    $groupedBills = [];
+    
+    foreach ($allSales as $sale) {
+        $key = ($sale->customer_code ?: 'Unknown') . '/' . ($sale->bill_no ?: 'N/A');
+        
+        if (!isset($groupedBills[$key])) {
+            $groupedBills[$key] = [
+                'customer_bill_no' => $key,
+                'cash_collection' => 0,
+                'cheques_collection' => 0,
+                'bag_box_total' => 0,
+                'bag_total' => 0,
+                'box_total' => 0,
+                'banks_transfer' => 0,
+                'bad_debt' => 0
+            ];
+        }
+        
+        $paymentType = $sale->payment_adjustment_type;
+        $givenAmount = floatval($sale->given_amount ?? 0);
+        $adjustmentAmount = floatval($sale->adjustment_amount ?? 0);
+        
+        // Cash payments
+        if ($paymentType === 'cash' || $paymentType === 'Cash' || ($paymentType === null && $givenAmount > 0)) {
+            $groupedBills[$key]['cash_collection'] += $givenAmount;
+        }
+        // Cheque payments
+        elseif ($paymentType === 'cheque' || $paymentType === 'Cheque') {
+            $groupedBills[$key]['cheques_collection'] += $givenAmount;
+        }
+        // Bank Transfer payments
+        elseif ($paymentType === 'Bank Transfer' || $paymentType === 'bank_transfer') {
+            $groupedBills[$key]['banks_transfer'] += $givenAmount;
+        }
+        // Bag to Box adjustments
+        elseif ($paymentType === 'bag_to_box') {
+            $groupedBills[$key]['bag_box_total'] += $adjustmentAmount;
+            $groupedBills[$key]['bag_total'] += floatval($sale->bag_count ?? 0);
+            $groupedBills[$key]['box_total'] += floatval($sale->box_count ?? 0);
+        }
+        // Bill to Bill adjustments - treat as Bag Box Total
+        elseif ($paymentType === 'bill_to_bill') {
+            $groupedBills[$key]['bag_box_total'] += $adjustmentAmount;
+        }
+        // Bad Debt adjustments
+        elseif ($paymentType === 'bad_debt') {
+            $groupedBills[$key]['bad_debt'] += $adjustmentAmount;
         }
     }
+    
+    // Calculate payment totals
+    $paymentTotals = [
+        'cash_collection' => 0,
+        'cheques_collection' => 0,
+        'bag_box_total' => 0,
+        'bag_total' => 0,
+        'box_total' => 0,
+        'banks_transfer' => 0,
+        'bad_debt' => 0
+    ];
+    
+    $paymentData = [];
+    foreach ($groupedBills as $bill) {
+        $paymentData[] = $bill;
+        $paymentTotals['cash_collection'] += $bill['cash_collection'];
+        $paymentTotals['cheques_collection'] += $bill['cheques_collection'];
+        $paymentTotals['bag_box_total'] += $bill['bag_box_total'];
+        $paymentTotals['bag_total'] += $bill['bag_total'];
+        $paymentTotals['box_total'] += $bill['box_total'];
+        $paymentTotals['banks_transfer'] += $bill['banks_transfer'];
+        $paymentTotals['bad_debt'] += $bill['bad_debt'];
+    }
+
+    // Email Data
+    $reportData = [
+        'processLogDate' => $processLogDate,
+        'adjustmentDate' => $adjustmentDate,
+        'totalRecordsMoved' => $totalRecordsToMove,
+        'sales' => $summarizedSales,
+        'raw_sales' => $allSales,
+        'grouped_sales' => $groupedSales,
+        'adjustments' => $adjustments,
+        'supplier_report' => $supplierReport,
+        'totals' => $totals,
+        // Payment collection data
+        'payment_data' => $paymentData,
+        'payment_totals' => $paymentTotals,
+        // Supplier loans data
+        'supplier_loans_moved' => $supplierLoans->count()
+    ];
+
+    DB::beginTransaction();
+
+    try {
+        // Move Sales → SalesHistory
+        $historyData = [];
+        $allowedColumns = (new Sale())->getFillable();
+
+        foreach ($allSales as $sale) {
+            $data = $sale->only($allowedColumns);
+            unset($data['id']);
+            $data['bag_real_weight'] = $sale->bag_real_weight ?? 0;
+
+            foreach ($data as $key => $value) {
+                if (is_array($value)) {
+                    $data[$key] = json_encode($value);
+                }
+            }
+
+            $historyData[] = $data;
+        }
+
+        SalesHistory::insert($historyData);
+        Sale::query()->delete();
+
+        // Move Supplier Loans → SupplierLoanHistory
+        if ($supplierLoans->count() > 0) {
+            $loanHistoryData = [];
+            $loanAllowedColumns = (new SupplierLoan())->getFillable();
+
+            foreach ($supplierLoans as $loan) {
+                $loanData = $loan->only($loanAllowedColumns);
+                unset($loanData['id']); // Remove the ID to let history table auto-generate its own
+                
+                // Handle any array/json fields if needed
+                foreach ($loanData as $key => $value) {
+                    if (is_array($value)) {
+                        $loanData[$key] = json_encode($value);
+                    }
+                }
+                
+                $loanHistoryData[] = $loanData;
+            }
+
+            SupplierLoanHistory::insert($loanHistoryData);
+            SupplierLoan::query()->delete();
+        }
+
+        // SAVE SELECTED DATE TO SETTINGS
+        Setting::updateOrCreate(
+            ['key' => 'last_day_started_date'],
+            ['value' => $processLogDate]
+        );
+
+        DB::commit();
+
+        // Send Email to multiple recipients
+        try {
+            foreach ($recipientEmails as $recipient) {
+                Mail::to($recipient)->send(new DayEndWeightReportMail($reportData));
+            }
+            Log::info("Day end report sent successfully to: " . implode(', ', $recipientEmails));
+        } catch (\Exception $e) {
+            Log::error("Mail Error: " . $e->getMessage());
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "Process complete. Reports emailed to " . count($recipientEmails) . " recipients. Moved " . $supplierLoans->count() . " supplier loan records.",
+            'adjustment_date_used' => $adjustmentDate,
+            'saved_date' => $processLogDate,
+            'payment_totals' => $paymentTotals,
+            'supplier_loans_moved' => $supplierLoans->count()
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+
+        return response()->json([
+            'success' => false,
+            'message' => $e->getMessage()
+        ], 500);
+    }
+}
+
     public function viewPublicBill($token)
     {
         $bill = DB::table('bill_links')->where('token', $token)->first();
@@ -1822,6 +1948,253 @@ public function getPaymentHistory($billNo)
         return response()->json([
             'success' => false,
             'message' => 'Failed to fetch payment history: ' . $e->getMessage()
+        ], 500);
+    }
+}
+public function getPaymentCollectionReport(Request $request)
+{
+    try {
+        // Get date range filter if provided
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
+        
+        // Determine which table(s) to query
+        $hasDateRange = ($startDate || $endDate);
+        
+        $allSales = collect(); // Use collection to merge results
+        
+        if ($hasDateRange) {
+            // If date range is selected, fetch from SalesHistory (archived data)
+            $query = SalesHistory::where('bill_printed', 'Y')
+                ->whereNotNull('bill_no')
+                ->where('bill_no', '!=', '');
+            
+            // Apply date filter
+            if ($startDate) {
+                $query->whereDate('Date', '>=', $startDate);
+            }
+            if ($endDate) {
+                $query->whereDate('Date', '<=', $endDate);
+            }
+            
+            $allSales = $query->get();
+        } else {
+            // If no date range, fetch from Sales (current data)
+            $query = Sale::where('bill_printed', 'Y')
+                ->whereNotNull('bill_no')
+                ->where('bill_no', '!=', '');
+            
+            $allSales = $query->get();
+        }
+        
+        // If no data found, return empty report
+        if ($allSales->isEmpty()) {
+            return response()->json([
+                'success' => true,
+                'data' => [],
+                'totals' => [
+                    'cash_collection' => 0,
+                    'cheques_collection' => 0,
+                    'bag_box_total' => 0,
+                    'bag_total' => 0,
+                    'box_total' => 0,
+                    'banks_transfer' => 0,
+                    'bad_debt' => 0
+                ],
+                'filters' => [
+                    'start_date' => $startDate,
+                    'end_date' => $endDate
+                ],
+                'source_table' => $hasDateRange ? 'sales_history' : 'sales'
+            ]);
+        }
+        
+        // Group by customer_code and bill_no
+        $groupedBills = [];
+        
+        foreach ($allSales as $sale) {
+            $key = ($sale->customer_code ?? 'Unknown') . '/' . ($sale->bill_no ?? 'N/A');
+            
+            if (!isset($groupedBills[$key])) {
+                $groupedBills[$key] = [
+                    'customer_code' => $sale->customer_code,
+                    'bill_no' => $sale->bill_no,
+                    'cash_collection' => 0,
+                    'cheques_collection' => 0,
+                    'bag_box_total' => 0,
+                    'bag_total' => 0,
+                    'box_total' => 0,
+                    'banks_transfer' => 0,
+                    'bad_debt' => 0,
+                    'sales_records' => []
+                ];
+            }
+            
+            // Determine payment type and add amounts
+            $paymentType = $sale->payment_adjustment_type;
+            $givenAmount = floatval($sale->given_amount ?? 0);
+            $adjustmentAmount = floatval($sale->adjustment_amount ?? 0);
+            
+            // Cash payments
+            if ($paymentType === 'cash' || $paymentType === 'Cash' || ($paymentType === null && $givenAmount > 0)) {
+                $groupedBills[$key]['cash_collection'] += $givenAmount;
+            }
+            // Cheque payments
+            elseif ($paymentType === 'cheque' || $paymentType === 'Cheque') {
+                $groupedBills[$key]['cheques_collection'] += $givenAmount;
+            }
+            // Bank Transfer payments
+            elseif ($paymentType === 'Bank Transfer' || $paymentType === 'bank_transfer') {
+                $groupedBills[$key]['banks_transfer'] += $givenAmount;
+            }
+            // Bag to Box adjustments
+            elseif ($paymentType === 'bag_to_box') {
+                $groupedBills[$key]['bag_box_total'] += $adjustmentAmount;
+                $groupedBills[$key]['bag_total'] += floatval($sale->bag_count ?? 0);
+                $groupedBills[$key]['box_total'] += floatval($sale->box_count ?? 0);
+            }
+            // Bill to Bill adjustments - treat as Bag Box Total
+            elseif ($paymentType === 'bill_to_bill') {
+                $groupedBills[$key]['bag_box_total'] += $adjustmentAmount;
+            }
+            // Bad Debt adjustments
+            elseif ($paymentType === 'bad_debt') {
+                $groupedBills[$key]['bad_debt'] += $adjustmentAmount;
+            }
+            
+            $groupedBills[$key]['sales_records'][] = $sale;
+        }
+        
+        // Calculate totals
+        $totals = [
+            'cash_collection' => 0,
+            'cheques_collection' => 0,
+            'bag_box_total' => 0,
+            'bag_total' => 0,
+            'box_total' => 0,
+            'banks_transfer' => 0,
+            'bad_debt' => 0
+        ];
+        
+        $reportData = [];
+        foreach ($groupedBills as $key => $bill) {
+            $reportData[] = [
+                'customer_bill_no' => $key,
+                'cash_collection' => $bill['cash_collection'],
+                'cheques_collection' => $bill['cheques_collection'],
+                'bag_box_total' => $bill['bag_box_total'],
+                'bag_total' => $bill['bag_total'],
+                'box_total' => $bill['box_total'],
+                'banks_transfer' => $bill['banks_transfer'],
+                'bad_debt' => $bill['bad_debt']
+            ];
+            
+            $totals['cash_collection'] += $bill['cash_collection'];
+            $totals['cheques_collection'] += $bill['cheques_collection'];
+            $totals['bag_box_total'] += $bill['bag_box_total'];
+            $totals['bag_total'] += $bill['bag_total'];
+            $totals['box_total'] += $bill['box_total'];
+            $totals['banks_transfer'] += $bill['banks_transfer'];
+            $totals['bad_debt'] += $bill['bad_debt'];
+        }
+        
+        return response()->json([
+            'success' => true,
+            'data' => $reportData,
+            'totals' => $totals,
+            'filters' => [
+                'start_date' => $startDate,
+                'end_date' => $endDate
+            ],
+            'source_table' => $hasDateRange ? 'sales_history' : 'sales',
+            'total_records' => $allSales->count()
+        ]);
+        
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to generate report: ' . $e->getMessage()
+        ], 500);
+    }
+}
+    
+    /**
+     * Get detailed payment breakdown by customer
+     */
+   public function getPaymentBreakdown(Request $request)
+{
+    try {
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
+        
+        $hasDateRange = ($startDate || $endDate);
+        
+        if ($hasDateRange) {
+            // If date range is selected, fetch from SalesHistory
+            $query = SalesHistory::where('bill_printed', 'Y')
+                ->whereNotNull('bill_no')
+                ->select(
+                    'customer_code',
+                    'bill_no',
+                    'payment_adjustment_type',
+                    'given_amount',
+                    'adjustment_amount',
+                    'bag_count',
+                    'box_count',
+                    'bag_value',
+                    'box_value',
+                    'cheq_no',
+                    'cheq_date',
+                    'bank_name',
+                    'transfer_reference_no',
+                    'bad_debt_name',
+                    'bad_debt_amount',
+                    'Date'
+                );
+        } else {
+            // If no date range, fetch from Sales
+            $query = Sale::where('bill_printed', 'Y')
+                ->whereNotNull('bill_no')
+                ->select(
+                    'customer_code',
+                    'bill_no',
+                    'payment_adjustment_type',
+                    'given_amount',
+                    'adjustment_amount',
+                    'bag_count',
+                    'box_count',
+                    'bag_value',
+                    'box_value',
+                    'cheq_no',
+                    'cheq_date',
+                    'bank_name',
+                    'transfer_reference_no',
+                    'bad_debt_name',
+                    'bad_debt_amount',
+                    'Date'
+                );
+        }
+        
+        if ($startDate) {
+            $query->whereDate('Date', '>=', $startDate);
+        }
+        if ($endDate) {
+            $query->whereDate('Date', '<=', $endDate);
+        }
+        
+        $sales = $query->get();
+        
+        return response()->json([
+            'success' => true,
+            'data' => $sales,
+            'source_table' => $hasDateRange ? 'sales_history' : 'sales',
+            'total_records' => $sales->count()
+        ]);
+        
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to get payment breakdown: ' . $e->getMessage()
         ], 500);
     }
 }

@@ -4,6 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Models\Bank;
 use App\Models\Sale;
+use App\Models\SalesHistory;
+use App\Models\SupplierLoan;
+use App\Models\SupplierLoanHistory;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Carbon\Carbon;
@@ -140,7 +143,10 @@ class BankController extends Controller
         }
 
         // Check if bank has any transactions
-        $hasTransactions = Sale::where('bank_account_id', $id)->exists();
+        $hasTransactions = Sale::where('bank_account_id', $id)->exists() || 
+                          SalesHistory::where('bank_account_id', $id)->exists() ||
+                          SupplierLoan::where('bank_name', $bank->bank_name)->exists() ||
+                          SupplierLoanHistory::where('bank_name', $bank->bank_name)->exists();
         
         if ($hasTransactions) {
             return response()->json([
@@ -202,85 +208,303 @@ class BankController extends Controller
     }
     
     /**
-     * Get bank account transactions with debit/credit entries
+     * Get combined transactions from Sales, SalesHistory, SupplierLoan, and SupplierLoanHistory tables
+     */
+   /**
+ * Get combined transactions from Sales, SalesHistory, SupplierLoan, and SupplierLoanHistory tables
+ */
+private function getCombinedTransactions($bankAccountId = null, $startDate = null, $endDate = null)
+{
+    $transactions = [];
+    
+    // Query from Sales table
+    $salesQuery = Sale::query();
+    if ($bankAccountId && $bankAccountId !== 'all' && $bankAccountId !== 'null') {
+        $salesQuery->where('bank_account_id', $bankAccountId);
+    }
+    if ($startDate) {
+        $salesQuery->whereDate('Date', '>=', $startDate);
+    }
+    if ($endDate) {
+        $salesQuery->whereDate('Date', '<=', $endDate);
+    }
+    
+    $salesTransactions = $salesQuery->get();
+    foreach ($salesTransactions as $sale) {
+        $totalPayable = (float)($sale->total ?? 0) + ((float)($sale->packs ?? 0) * (float)($sale->CustomerPackCost ?? 0));
+        
+        $transactions[] = [
+            'source' => 'sales',
+            'type' => 'customer_sale',
+            'id' => $sale->id,
+            'Date' => $sale->Date,
+            'bill_no' => $sale->bill_no,
+            'customer_name' => $sale->customer_name,
+            'customer_code' => $sale->customer_code,
+            'cheq_no' => $sale->cheq_no,
+            'transfer_reference_no' => $sale->transfer_reference_no,
+            'transfer_date' => $sale->transfer_date,
+            'transfer_notes' => $sale->transfer_notes,
+            'bank_account_id' => $sale->bank_account_id,
+            'bank_name' => $sale->bank_name,
+            'given_amount' => (float)($sale->given_amount ?? 0),  // This becomes DEBIT
+            'total' => (float)($sale->total ?? 0),
+            'packs' => (int)($sale->packs ?? 0),
+            'CustomerPackCost' => (float)($sale->CustomerPackCost ?? 0),
+            'total_payable' => $totalPayable,  // This becomes CREDIT
+            'payment_adjustment_type' => $sale->payment_adjustment_type ?? 'none',
+            'adjustment_amount' => (float)($sale->adjustment_amount ?? 0),
+            'given_amount_applied' => $sale->given_amount_applied,
+            'created_at' => $sale->created_at,
+        ];
+    }
+    
+    // Query from SalesHistory table
+    $historyQuery = SalesHistory::query();
+    if ($bankAccountId && $bankAccountId !== 'all' && $bankAccountId !== 'null') {
+        $historyQuery->where('bank_account_id', $bankAccountId);
+    }
+    if ($startDate) {
+        $historyQuery->whereDate('Date', '>=', $startDate);
+    }
+    if ($endDate) {
+        $historyQuery->whereDate('Date', '<=', $endDate);
+    }
+    
+    $historyTransactions = $historyQuery->get();
+    foreach ($historyTransactions as $history) {
+        $totalPayable = (float)($history->total ?? 0) + ((float)($history->packs ?? 0) * (float)($history->CustomerPackCost ?? 0));
+        
+        $transactions[] = [
+            'source' => 'sales_history',
+            'type' => 'customer_sale',
+            'id' => $history->id,
+            'Date' => $history->Date,
+            'bill_no' => $history->bill_no,
+            'customer_name' => $history->customer_name,
+            'customer_code' => $history->customer_code,
+            'cheq_no' => $history->cheq_no,
+            'transfer_reference_no' => $history->transfer_reference_no,
+            'transfer_date' => $history->transfer_date,
+            'transfer_notes' => $history->transfer_notes,
+            'bank_account_id' => $history->bank_account_id,
+            'bank_name' => $history->bank_name,
+            'given_amount' => (float)($history->given_amount ?? 0),  // This becomes DEBIT
+            'total' => (float)($history->total ?? 0),
+            'packs' => (int)($history->packs ?? 0),
+            'CustomerPackCost' => (float)($history->CustomerPackCost ?? 0),
+            'total_payable' => $totalPayable,  // This becomes CREDIT
+            'payment_adjustment_type' => $history->payment_adjustment_type ?? 'none',
+            'adjustment_amount' => (float)($history->adjustment_amount ?? 0),
+            'given_amount_applied' => $history->given_amount_applied,
+            'created_at' => $history->created_at,
+        ];
+    }
+    
+    // Query from SupplierLoan table (current/active loans)
+    // These are CREDIT transactions (money going OUT to suppliers)
+    $loanQuery = SupplierLoan::query();
+    if ($bankAccountId && $bankAccountId !== 'all' && $bankAccountId !== 'null') {
+        $bank = Bank::find($bankAccountId);
+        if ($bank) {
+            $loanQuery->where('bank_name', $bank->bank_name);
+        }
+    }
+    if ($startDate) {
+        $loanQuery->whereDate('realized_date', '>=', $startDate);
+    }
+    if ($endDate) {
+        $loanQuery->whereDate('realized_date', '<=', $endDate);
+    }
+    
+    $loanTransactions = $loanQuery->get();
+    foreach ($loanTransactions as $loan) {
+        // The loan_amount is the amount paid to supplier - this should be CREDIT
+        $loanAmount = (float)($loan->loan_amount ?? 0);
+        $totalAmount = (float)($loan->total_amount ?? $loanAmount);
+        
+        $transactions[] = [
+            'source' => 'supplier_loan',
+            'type' => 'supplier_payment',
+            'id' => $loan->id,
+            'Date' => $loan->Date ?? $loan->realized_date ?? $loan->created_at,  // Use Date column first
+            'bill_no' => $loan->bill_no,
+            'customer_name' => $loan->code, // Supplier code
+            'customer_code' => $loan->code,
+            'cheq_no' => $loan->cheque_no,
+            'transfer_reference_no' => null,
+            'transfer_date' => null,
+            'transfer_notes' => $loan->notes,
+            'bank_account_id' => $bankAccountId,
+            'bank_name' => $loan->bank_name,
+            'given_amount' => 0,  // No DEBIT for supplier payments
+            'total' => $loanAmount,
+            'packs' => 0,
+            'CustomerPackCost' => 0,
+            'total_payable' => $loanAmount,  // This becomes CREDIT (money going OUT)
+            'payment_adjustment_type' => $loan->type ?? 'supplier_loan',
+            'adjustment_amount' => $loanAmount,
+            'given_amount_applied' => 'Y',
+            'created_at' => $loan->created_at,
+        ];
+    }
+    
+    // Query from SupplierLoanHistory table (historical/archived loans)
+    // These are also CREDIT transactions
+    $loanHistoryQuery = SupplierLoanHistory::query();
+    if ($bankAccountId && $bankAccountId !== 'all' && $bankAccountId !== 'null') {
+        $bank = Bank::find($bankAccountId);
+        if ($bank) {
+            $loanHistoryQuery->where('bank_name', $bank->bank_name);
+        }
+    }
+    if ($startDate) {
+        $loanHistoryQuery->whereDate('realized_date', '>=', $startDate);
+    }
+    if ($endDate) {
+        $loanHistoryQuery->whereDate('realized_date', '<=', $endDate);
+    }
+    
+    $loanHistoryTransactions = $loanHistoryQuery->get();
+    foreach ($loanHistoryTransactions as $loanHistory) {
+        // The loan_amount is the amount paid to supplier - this should be CREDIT
+        $loanAmount = (float)($loanHistory->loan_amount ?? 0);
+        
+        $transactions[] = [
+            'source' => 'supplier_loan_history',
+            'type' => 'supplier_payment',
+            'id' => $loanHistory->id,
+            'Date' => $loanHistory->Date ?? $loanHistory->realized_date ?? $loanHistory->created_at,
+            'bill_no' => $loanHistory->bill_no,
+            'customer_name' => $loanHistory->code, // Supplier code
+            'customer_code' => $loanHistory->code,
+            'cheq_no' => $loanHistory->cheque_no,
+            'transfer_reference_no' => null,
+            'transfer_date' => null,
+            'transfer_notes' => $loanHistory->notes,
+            'bank_account_id' => $bankAccountId,
+            'bank_name' => $loanHistory->bank_name,
+            'given_amount' => 0,  // No DEBIT for supplier payments
+            'total' => $loanAmount,
+            'packs' => 0,
+            'CustomerPackCost' => 0,
+            'total_payable' => $loanAmount,  // This becomes CREDIT (money going OUT)
+            'payment_adjustment_type' => $loanHistory->type ?? 'supplier_loan',
+            'adjustment_amount' => $loanAmount,
+            'given_amount_applied' => 'Y',
+            'created_at' => $loanHistory->created_at,
+        ];
+    }
+    
+    // Sort by Date
+    usort($transactions, function($a, $b) {
+        return strtotime($a['Date']) - strtotime($b['Date']);
+    });
+    
+    return $transactions;
+}
+    
+    /**
+     * Get bank account transactions with debit/credit entries (Paginated)
      */
     public function getTransactions(Request $request, $bankAccountId = null)
     {
-        $query = Sale::with(['bankAccount', 'customer']);
-
-        if ($bankAccountId && $bankAccountId !== 'all') {
-            $query->where('bank_account_id', $bankAccountId);
-        }
-
-        // Apply filters
-        if ($request->has('start_date')) {
-            $query->whereDate('Date', '>=', $request->start_date);
-        }
-
-        if ($request->has('end_date')) {
-            $query->whereDate('Date', '<=', $request->end_date);
-        }
-
-        if ($request->has('search') && !empty($request->search)) {
-            $search = $request->search;
-            $query->where(function($q) use ($search) {
-                $q->where('customer_name', 'like', "%{$search}%")
-                  ->orWhere('bill_no', 'like', "%{$search}%")
-                  ->orWhere('cheq_no', 'like', "%{$search}%")
-                  ->orWhere('transfer_reference_no', 'like', "%{$search}%");
+        $startDate = $request->get('start_date');
+        $endDate = $request->get('end_date');
+        $perPage = (int)$request->get('per_page', 20);
+        $search = $request->get('search');
+        $filterType = $request->get('filter_type');
+        
+        // Get combined transactions from all tables
+        $transactions = $this->getCombinedTransactions($bankAccountId, $startDate, $endDate);
+        
+        // Apply search filter
+        if ($search && !empty($search)) {
+            $transactions = array_filter($transactions, function($transaction) use ($search) {
+                return stripos($transaction['customer_name'], $search) !== false ||
+                       stripos($transaction['bill_no'], $search) !== false ||
+                       ($transaction['cheq_no'] && stripos($transaction['cheq_no'], $search) !== false) ||
+                       ($transaction['transfer_reference_no'] && stripos($transaction['transfer_reference_no'], $search) !== false);
             });
+            $transactions = array_values($transactions);
         }
-
-        $transactions = $query->orderBy('Date', 'desc')
-            ->orderBy('created_at', 'desc')
-            ->paginate($request->get('per_page', 20));
-
-        $transactions->getCollection()->transform(function($sale) {
-            // Determine payment method
+        
+        // Apply debit/credit filter
+        if ($filterType === 'debit') {
+            $transactions = array_filter($transactions, function($transaction) {
+                return $transaction['given_amount'] > 0;
+            });
+            $transactions = array_values($transactions);
+        } elseif ($filterType === 'credit') {
+            $transactions = array_filter($transactions, function($transaction) {
+                return $transaction['total_payable'] > 0;
+            });
+            $transactions = array_values($transactions);
+        }
+        
+        // Paginate manually
+        $currentPage = (int)$request->get('page', 1);
+        $offset = ($currentPage - 1) * $perPage;
+        $paginatedItems = array_slice($transactions, $offset, $perPage);
+        
+        // Transform for response
+        $formattedTransactions = [];
+        foreach ($paginatedItems as $transaction) {
             $paymentMethod = 'Cash';
-            if ($sale->transfer_reference_no) {
+            if ($transaction['transfer_reference_no']) {
                 $paymentMethod = 'Bank Transfer';
-            } elseif ($sale->cheq_no) {
+            } elseif ($transaction['cheq_no']) {
                 $paymentMethod = 'Cheque';
             }
             
-            return [
-                'id' => $sale->id,
-                'date' => $sale->Date,
-                'bill_no' => $sale->bill_no,
-                'customer_name' => $sale->customer_name,
-                'customer_code' => $sale->customer_code,
-                'cheq_no' => $sale->cheq_no,
-                'transfer_reference_no' => $sale->transfer_reference_no,
-                'transfer_date' => $sale->transfer_date,
-                'transfer_notes' => $sale->transfer_notes,
-                'bank_name' => $sale->bankAccount ? $sale->bankAccount->bank_name : $sale->bank_name,
-                'bank_account_id' => $sale->bank_account_id,
+            $remainingAmount = $transaction['total_payable'] - $transaction['given_amount'];
+            $isFullyPaid = $remainingAmount <= 0;
+            
+            $formattedTransactions[] = [
+                'id' => $transaction['id'],
+                'date' => $transaction['Date'],
+                'bill_no' => $transaction['bill_no'],
+                'customer_name' => $transaction['customer_name'],
+                'customer_code' => $transaction['customer_code'],
+                'cheq_no' => $transaction['cheq_no'],
+                'transfer_reference_no' => $transaction['transfer_reference_no'],
+                'transfer_date' => $transaction['transfer_date'],
+                'transfer_notes' => $transaction['transfer_notes'],
+                'bank_name' => $transaction['bank_name'],
+                'bank_account_id' => $transaction['bank_account_id'],
                 'payment_method' => $paymentMethod,
-                'payment_adjustment_type' => $sale->payment_adjustment_type ?? 'none',
-                'debit' => (float)$sale->given_amount,
-                'credit' => (float)$sale->total,
-                'total_payable' => (float)$sale->total_payable,
-                'given_amount' => (float)$sale->given_amount,
-                'remaining_amount' => (float)$sale->remaining_amount,
-                'is_fully_paid' => $sale->is_fully_paid,
-                'status' => $sale->is_fully_paid ? 'completed' : ($sale->given_amount > 0 ? 'partial' : 'pending')
+                'payment_adjustment_type' => $transaction['payment_adjustment_type'],
+                'debit' => $transaction['given_amount'],
+                'credit' => $transaction['total_payable'],
+                'total_payable' => $transaction['total_payable'],
+                'given_amount' => $transaction['given_amount'],
+                'remaining_amount' => $remainingAmount,
+                'is_fully_paid' => $isFullyPaid,
+                'status' => $isFullyPaid ? 'completed' : ($transaction['given_amount'] > 0 ? 'partial' : 'pending'),
+                'source_table' => $transaction['source'],
+                'transaction_type' => $transaction['type'] ?? 'customer_sale'
             ];
-        });
-
+        }
+        
         return response()->json([
             'success' => true,
-            'data' => $transactions
+            'data' => [
+                'current_page' => $currentPage,
+                'data' => $formattedTransactions,
+                'total' => count($transactions),
+                'per_page' => $perPage,
+                'last_page' => ceil(count($transactions) / $perPage)
+            ]
         ]);
     }
     
     /**
-     * Get bank account statement with proper debit/credit format - FIXED to show ALL transactions
+     * Get bank account statement with proper debit/credit format
      */
     public function getStatement(Request $request, $bankAccountId)
     {
-        $startDate = $request->get('start_date', Carbon::now()->startOfMonth()->format('Y-m-d'));
-        $endDate = $request->get('end_date', Carbon::now()->endOfMonth()->format('Y-m-d'));
+        $startDate = $request->get('start_date');
+        $endDate = $request->get('end_date');
         
         $bank = Bank::find($bankAccountId);
         
@@ -291,58 +515,69 @@ class BankController extends Controller
             ], 404);
         }
         
-        // REMOVED THE CHEQUE/TRANSFER FILTER - Now shows ALL transactions
-        $transactions = Sale::where('bank_account_id', $bankAccountId)
-            ->whereBetween('Date', [$startDate, $endDate])
-            ->orderBy('Date', 'asc')
-            ->orderBy('created_at', 'asc')
-            ->get();
+        // Get combined transactions from all tables
+        $transactions = $this->getCombinedTransactions($bankAccountId, $startDate, $endDate);
+        
+        // Calculate opening balance
+        $openingBalance = $this->getOpeningBalance($bankAccountId, $startDate);
         
         $statement = [];
-        $runningBalance = $this->getOpeningBalance($bankAccountId, $startDate);
+        $runningBalance = $openingBalance;
+        $totalDebit = 0;
+        $totalCredit = 0;
         
         foreach ($transactions as $transaction) {
-            // Debit: Money received / deposited (Dr)
-            $debit = $transaction->given_amount > 0 ? (float)$transaction->given_amount : 0;
-            // Credit: Sales / payments made (Cr)
-            $credit = $transaction->total > 0 ? (float)$transaction->total : 0;
+            $debit = $transaction['given_amount'];
+            $credit = $transaction['total_payable'];
             
             $runningBalance += $debit - $credit;
+            $totalDebit += $debit;
+            $totalCredit += $credit;
             
-            // Determine transaction type and description
-            $description = "Bill #{$transaction->bill_no} - {$transaction->customer_name}";
-            $paymentMethod = 'Cash';
-            
-            if ($transaction->transfer_reference_no) {
-                $paymentMethod = "Bank Transfer";
-                $description .= " [Bank Transfer Ref: {$transaction->transfer_reference_no}]";
-            } elseif ($transaction->cheq_no) {
-                $paymentMethod = "Cheque";
-                $description .= " [Cheque: {$transaction->cheq_no}]";
-            }
-            
-            // Add adjustment description if any
-            if ($transaction->payment_adjustment_type && $transaction->payment_adjustment_type !== 'none' && $transaction->payment_adjustment_type !== 'Cash') {
-                $description .= " ({$this->getAdjustmentTypeLabel($transaction->payment_adjustment_type)})";
+            // Build description based on transaction type
+            if ($transaction['type'] === 'supplier_payment') {
+                $description = "Supplier Payment - {$transaction['customer_name']}";
+                if ($transaction['bill_no']) {
+                    $description .= " (Bill #{$transaction['bill_no']})";
+                }
+                $paymentMethod = $transaction['cheq_no'] ? 'Cheque' : 'Cash';
+            } else {
+                $description = "Bill #{$transaction['bill_no']} - {$transaction['customer_name']}";
+                $paymentMethod = 'Cash';
+                
+                if ($transaction['transfer_reference_no']) {
+                    $paymentMethod = "Bank Transfer";
+                    $description .= " [Bank Transfer Ref: {$transaction['transfer_reference_no']}]";
+                } elseif ($transaction['cheq_no']) {
+                    $paymentMethod = "Cheque";
+                    $description .= " [Cheque: {$transaction['cheq_no']}]";
+                }
+                
+                // Add adjustment description if any
+                if ($transaction['payment_adjustment_type'] && $transaction['payment_adjustment_type'] !== 'none' && $transaction['payment_adjustment_type'] !== 'Cash') {
+                    $description .= " ({$this->getAdjustmentTypeLabel($transaction['payment_adjustment_type'])})";
+                }
             }
             
             $statement[] = [
-                'date' => $transaction->Date,
+                'date' => $transaction['Date'],
                 'description' => $description,
                 'bank_name' => $bank->bank_name,
-                'cheq_no' => $transaction->cheq_no,
-                'transfer_reference_no' => $transaction->transfer_reference_no,
-                'transfer_date' => $transaction->transfer_date,
-                'transfer_notes' => $transaction->transfer_notes,
+                'cheq_no' => $transaction['cheq_no'],
+                'transfer_reference_no' => $transaction['transfer_reference_no'],
+                'transfer_date' => $transaction['transfer_date'],
+                'transfer_notes' => $transaction['transfer_notes'],
                 'payment_method' => $paymentMethod,
-                'adjustment_type' => $transaction->payment_adjustment_type ?? 'none',
+                'adjustment_type' => $transaction['payment_adjustment_type'] ?? 'none',
                 'debit' => $debit,
                 'credit' => $credit,
                 'balance' => $runningBalance,
-                'transaction_id' => $transaction->id,
-                'bill_no' => $transaction->bill_no,
-                'customer_name' => $transaction->customer_name,
-                'customer_code' => $transaction->customer_code
+                'transaction_id' => $transaction['id'],
+                'bill_no' => $transaction['bill_no'],
+                'customer_name' => $transaction['customer_name'],
+                'customer_code' => $transaction['customer_code'],
+                'source_table' => $transaction['source'],
+                'transaction_type' => $transaction['type'] ?? 'customer_sale'
             ];
         }
         
@@ -350,177 +585,123 @@ class BankController extends Controller
             'success' => true,
             'data' => [
                 'bank' => $bank,
-                'start_date' => $startDate,
-                'end_date' => $endDate,
-                'opening_balance' => $this->getOpeningBalance($bankAccountId, $startDate),
+                'start_date' => $startDate ?? 'All time',
+                'end_date' => $endDate ?? 'All time',
+                'opening_balance' => $openingBalance,
                 'closing_balance' => $runningBalance,
                 'transactions' => $statement,
                 'summary' => [
-                    'total_debit' => collect($statement)->sum('debit'),
-                    'total_credit' => collect($statement)->sum('credit')
+                    'total_debit' => $totalDebit,
+                    'total_credit' => $totalCredit
                 ]
             ]
         ]);
     }
     
     /**
-     * Get statement for ALL bank accounts combined - FIXED to show ALL transactions
+     * Get statement for ALL bank accounts combined
      */
-    /**
- * Get statement for ALL bank accounts combined - INCLUDES transactions with no bank account
- */
-public function getAllAccountsStatement(Request $request)
-{
-    $startDate = $request->get('start_date', Carbon::now()->startOfMonth()->format('Y-m-d'));
-    $endDate = $request->get('end_date', Carbon::now()->endOfMonth()->format('Y-m-d'));
-    
-    $allTransactions = [];
-    $totalOpeningBalance = 0;
-    $totalDebit = 0;
-    $totalCredit = 0;
-    
-    // Get all bank accounts
-    $bankAccounts = Bank::all();
-    
-    // Process each bank account's transactions
-    foreach ($bankAccounts as $bank) {
-        $openingBalance = $this->getOpeningBalance($bank->id, $startDate);
-        $totalOpeningBalance += $openingBalance;
+    public function getAllAccountsStatement(Request $request)
+    {
+        $startDate = $request->get('start_date');
+        $endDate = $request->get('end_date');
         
-        // Get transactions for this specific bank
-        $transactions = Sale::where('bank_account_id', $bank->id)
-            ->whereBetween('Date', [$startDate, $endDate])
-            ->orderBy('Date', 'asc')
-            ->orderBy('created_at', 'asc')
-            ->get();
+        // Get all bank accounts
+        $bankAccounts = Bank::all();
         
-        $runningBalance = $openingBalance;
+        // Get combined transactions from all tables
+        $allTransactions = $this->getCombinedTransactions('all', $startDate, $endDate);
         
-        foreach ($transactions as $transaction) {
-            $debit = $transaction->given_amount > 0 ? (float)$transaction->given_amount : 0;
-            $credit = $transaction->total > 0 ? (float)$transaction->total : 0;
+        // Calculate total opening balance across all banks
+        $totalOpeningBalance = 0;
+        foreach ($bankAccounts as $bank) {
+            $totalOpeningBalance += $this->getOpeningBalance($bank->id, $startDate);
+        }
+        
+        // Process transactions
+        $statement = [];
+        $runningBalance = $totalOpeningBalance;
+        $totalDebit = 0;
+        $totalCredit = 0;
+        
+        foreach ($allTransactions as $transaction) {
+            $debit = $transaction['given_amount'];
+            $credit = $transaction['total_payable'];
             
             $runningBalance += $debit - $credit;
             $totalDebit += $debit;
             $totalCredit += $credit;
             
-            $description = "Bill #{$transaction->bill_no} - {$transaction->customer_name}";
-            $paymentMethod = 'Cash';
-            
-            if ($transaction->transfer_reference_no) {
-                $paymentMethod = "Bank Transfer";
-                $description .= " [Bank Transfer Ref: {$transaction->transfer_reference_no}]";
-            } elseif ($transaction->cheq_no) {
-                $paymentMethod = "Cheque";
-                $description .= " [Cheque: {$transaction->cheq_no}]";
+            // Build description based on transaction type
+            if ($transaction['type'] === 'supplier_payment') {
+                $description = "Supplier Payment - {$transaction['customer_name']}";
+                if ($transaction['bill_no']) {
+                    $description .= " (Bill #{$transaction['bill_no']})";
+                }
+                $paymentMethod = $transaction['cheq_no'] ? 'Cheque' : 'Cash';
+            } else {
+                $description = "Bill #{$transaction['bill_no']} - {$transaction['customer_name']}";
+                $paymentMethod = 'Cash';
+                
+                if ($transaction['transfer_reference_no']) {
+                    $paymentMethod = "Bank Transfer";
+                    $description .= " [Bank Transfer Ref: {$transaction['transfer_reference_no']}]";
+                } elseif ($transaction['cheq_no']) {
+                    $paymentMethod = "Cheque";
+                    $description .= " [Cheque: {$transaction['cheq_no']}]";
+                }
             }
             
-            // Add adjustment description if any
-            if ($transaction->payment_adjustment_type && $transaction->payment_adjustment_type !== 'none' && $transaction->payment_adjustment_type !== 'Cash') {
-                $description .= " ({$this->getAdjustmentTypeLabel($transaction->payment_adjustment_type)})";
+            if ($transaction['payment_adjustment_type'] && $transaction['payment_adjustment_type'] !== 'none' && $transaction['payment_adjustment_type'] !== 'Cash') {
+                $description .= " ({$this->getAdjustmentTypeLabel($transaction['payment_adjustment_type'])})";
             }
             
-            $allTransactions[] = [
-                'date' => $transaction->Date,
+            // Get bank name
+            $bankName = $transaction['bank_name'] ?? 'Unknown Bank';
+            $bank = $bankAccounts->firstWhere('id', $transaction['bank_account_id']);
+            if ($bank) {
+                $bankName = $bank->bank_name;
+            }
+            
+            $statement[] = [
+                'date' => $transaction['Date'],
                 'description' => $description,
-                'bank_name' => $bank->bank_name,
-                'cheq_no' => $transaction->cheq_no,
-                'transfer_reference_no' => $transaction->transfer_reference_no,
-                'transfer_date' => $transaction->transfer_date,
-                'transfer_notes' => $transaction->transfer_notes,
+                'bank_name' => $bankName,
+                'cheq_no' => $transaction['cheq_no'],
+                'transfer_reference_no' => $transaction['transfer_reference_no'],
+                'transfer_date' => $transaction['transfer_date'],
+                'transfer_notes' => $transaction['transfer_notes'],
                 'payment_method' => $paymentMethod,
-                'adjustment_type' => $transaction->payment_adjustment_type ?? 'none',
+                'adjustment_type' => $transaction['payment_adjustment_type'] ?? 'none',
                 'debit' => $debit,
                 'credit' => $credit,
                 'balance' => $runningBalance,
-                'transaction_id' => $transaction->id,
-                'bill_no' => $transaction->bill_no,
-                'customer_name' => $transaction->customer_name,
-                'customer_code' => $transaction->customer_code,
-                'bank_account_id' => $bank->id
+                'transaction_id' => $transaction['id'],
+                'bill_no' => $transaction['bill_no'],
+                'customer_name' => $transaction['customer_name'],
+                'customer_code' => $transaction['customer_code'],
+                'bank_account_id' => $transaction['bank_account_id'],
+                'source_table' => $transaction['source'],
+                'transaction_type' => $transaction['type'] ?? 'customer_sale'
             ];
         }
-    }
-    
-    // ALSO include transactions with NO bank_account_id (NULL)
-    $nullBankTransactions = Sale::whereNull('bank_account_id')
-        ->whereBetween('Date', [$startDate, $endDate])
-        ->orderBy('Date', 'asc')
-        ->orderBy('created_at', 'asc')
-        ->get();
-    
-    foreach ($nullBankTransactions as $transaction) {
-        $debit = $transaction->given_amount > 0 ? (float)$transaction->given_amount : 0;
-        $credit = $transaction->total > 0 ? (float)$transaction->total : 0;
         
-        $totalDebit += $debit;
-        $totalCredit += $credit;
-        
-        $description = "Bill #{$transaction->bill_no} - {$transaction->customer_name}";
-        $paymentMethod = 'Cash';
-        
-        if ($transaction->transfer_reference_no) {
-            $paymentMethod = "Bank Transfer";
-            $description .= " [Bank Transfer Ref: {$transaction->transfer_reference_no}]";
-        } elseif ($transaction->cheq_no) {
-            $paymentMethod = "Cheque";
-            $description .= " [Cheque: {$transaction->cheq_no}]";
-        }
-        
-        // Add adjustment description if any
-        if ($transaction->payment_adjustment_type && $transaction->payment_adjustment_type !== 'none' && $transaction->payment_adjustment_type !== 'Cash') {
-            $description .= " ({$this->getAdjustmentTypeLabel($transaction->payment_adjustment_type)})";
-        }
-        
-        $allTransactions[] = [
-            'date' => $transaction->Date,
-            'description' => $description,
-            'bank_name' => 'No Bank Account',  // Special label for transactions without bank account
-            'cheq_no' => $transaction->cheq_no,
-            'transfer_reference_no' => $transaction->transfer_reference_no,
-            'transfer_date' => $transaction->transfer_date,
-            'transfer_notes' => $transaction->transfer_notes,
-            'payment_method' => $paymentMethod,
-            'adjustment_type' => $transaction->payment_adjustment_type ?? 'none',
-            'debit' => $debit,
-            'credit' => $credit,
-            'balance' => 0, // Will be recalculated after sort
-            'transaction_id' => $transaction->id,
-            'bill_no' => $transaction->bill_no,
-            'customer_name' => $transaction->customer_name,
-            'customer_code' => $transaction->customer_code,
-            'bank_account_id' => null
-        ];
-    }
-    
-    // Sort all transactions by date
-    usort($allTransactions, function($a, $b) {
-        return strtotime($a['date']) - strtotime($b['date']);
-    });
-    
-    // Recalculate running balances for combined view
-    $runningBalance = $totalOpeningBalance;
-    foreach ($allTransactions as &$transaction) {
-        $runningBalance += $transaction['debit'] - $transaction['credit'];
-        $transaction['balance'] = $runningBalance;
-    }
-    
-    return response()->json([
-        'success' => true,
-        'data' => [
-            'bank' => null,
-            'start_date' => $startDate,
-            'end_date' => $endDate,
-            'opening_balance' => $totalOpeningBalance,
-            'closing_balance' => $runningBalance,
-            'transactions' => $allTransactions,
-            'summary' => [
-                'total_debit' => $totalDebit,
-                'total_credit' => $totalCredit
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'bank' => null,
+                'start_date' => $startDate ?? 'All time',
+                'end_date' => $endDate ?? 'All time',
+                'opening_balance' => $totalOpeningBalance,
+                'closing_balance' => $runningBalance,
+                'transactions' => $statement,
+                'summary' => [
+                    'total_debit' => $totalDebit,
+                    'total_credit' => $totalCredit
+                ]
             ]
-        ]
-    ]);
-}
+        ]);
+    }
     
     /**
      * Get adjustment type label
@@ -534,6 +715,7 @@ public function getAllAccountsStatement(Request $request)
             'cash' => 'Cash Payment',
             'cheque' => 'Cheque Payment',
             'Bank Transfer' => 'Bank Transfer',
+            'supplier_loan' => 'Supplier Payment',
             'none' => 'No Adjustment'
         ];
         return $labels[$type] ?? $type;
@@ -544,43 +726,65 @@ public function getAllAccountsStatement(Request $request)
      */
     public function getChequeReport(Request $request)
     {
-        $query = Sale::whereNotNull('cheq_no')
-            ->whereNotNull('bank_account_id')
-            ->with(['bankAccount', 'customer']);
+        $startDate = $request->get('start_date');
+        $endDate = $request->get('end_date');
+        $bankAccountId = $request->get('bank_account_id');
         
-        if ($request->has('status')) {
-            if ($request->status === 'pending') {
-                $query->where('is_fully_paid', false);
-            } elseif ($request->status === 'cleared') {
-                $query->where('is_fully_paid', true);
-            }
-        }
+        // Get combined transactions
+        $transactions = $this->getCombinedTransactions($bankAccountId, $startDate, $endDate);
         
-        if ($request->has('bank_account_id') && $request->bank_account_id !== 'all') {
-            $query->where('bank_account_id', $request->bank_account_id);
-        }
-        
-        $cheques = $query->orderBy('cheq_date', 'desc')
-            ->orderBy('Date', 'desc')
-            ->paginate($request->get('per_page', 20));
-        
-        $cheques->getCollection()->transform(function($cheque) {
-            return [
-                'id' => $cheque->id,
-                'cheq_no' => $cheque->cheq_no,
-                'cheq_date' => $cheque->cheq_date,
-                'bank_name' => $cheque->bankAccount ? $cheque->bankAccount->bank_name : $cheque->bank_name,
-                'customer_name' => $cheque->customer_name,
-                'bill_no' => $cheque->bill_no,
-                'amount' => (float)$cheque->given_amount,
-                'date' => $cheque->Date,
-                'status' => $cheque->is_fully_paid ? 'cleared' : 'pending'
-            ];
+        // Filter for cheque transactions only
+        $chequeTransactions = array_filter($transactions, function($transaction) {
+            return !empty($transaction['cheq_no']);
         });
+        
+        // Apply status filter
+        $status = $request->get('status');
+        if ($status === 'pending') {
+            $chequeTransactions = array_filter($chequeTransactions, function($transaction) {
+                return $transaction['given_amount'] < $transaction['total_payable'];
+            });
+        } elseif ($status === 'cleared') {
+            $chequeTransactions = array_filter($chequeTransactions, function($transaction) {
+                return $transaction['given_amount'] >= $transaction['total_payable'];
+            });
+        }
+        
+        $chequeTransactions = array_values($chequeTransactions);
+        
+        // Paginate
+        $perPage = (int)$request->get('per_page', 20);
+        $currentPage = (int)$request->get('page', 1);
+        $offset = ($currentPage - 1) * $perPage;
+        $paginatedItems = array_slice($chequeTransactions, $offset, $perPage);
+        
+        $formattedCheques = [];
+        foreach ($paginatedItems as $cheque) {
+            $isFullyPaid = $cheque['given_amount'] >= $cheque['total_payable'];
+            
+            $formattedCheques[] = [
+                'id' => $cheque['id'],
+                'cheq_no' => $cheque['cheq_no'],
+                'cheq_date' => $cheque['transfer_date'] ?? $cheque['Date'],
+                'bank_name' => $cheque['bank_name'],
+                'customer_name' => $cheque['customer_name'],
+                'bill_no' => $cheque['bill_no'],
+                'amount' => $cheque['given_amount'],
+                'date' => $cheque['Date'],
+                'status' => $isFullyPaid ? 'cleared' : 'pending',
+                'source_table' => $cheque['source']
+            ];
+        }
         
         return response()->json([
             'success' => true,
-            'data' => $cheques
+            'data' => [
+                'current_page' => $currentPage,
+                'data' => $formattedCheques,
+                'total' => count($chequeTransactions),
+                'per_page' => $perPage,
+                'last_page' => ceil(count($chequeTransactions) / $perPage)
+            ]
         ]);
     }
     
@@ -589,44 +793,66 @@ public function getAllAccountsStatement(Request $request)
      */
     public function getBankTransferReport(Request $request)
     {
-        $query = Sale::whereNotNull('transfer_reference_no')
-            ->whereNotNull('bank_account_id')
-            ->with(['bankAccount', 'customer']);
+        $startDate = $request->get('start_date');
+        $endDate = $request->get('end_date');
+        $bankAccountId = $request->get('bank_account_id');
         
-        if ($request->has('status')) {
-            if ($request->status === 'pending') {
-                $query->where('is_fully_paid', false);
-            } elseif ($request->status === 'cleared') {
-                $query->where('is_fully_paid', true);
-            }
-        }
+        // Get combined transactions
+        $transactions = $this->getCombinedTransactions($bankAccountId, $startDate, $endDate);
         
-        if ($request->has('bank_account_id') && $request->bank_account_id !== 'all') {
-            $query->where('bank_account_id', $request->bank_account_id);
-        }
-        
-        $transfers = $query->orderBy('transfer_date', 'desc')
-            ->orderBy('Date', 'desc')
-            ->paginate($request->get('per_page', 20));
-        
-        $transfers->getCollection()->transform(function($transfer) {
-            return [
-                'id' => $transfer->id,
-                'reference_no' => $transfer->transfer_reference_no,
-                'transfer_date' => $transfer->transfer_date,
-                'bank_name' => $transfer->bankAccount ? $transfer->bankAccount->bank_name : $transfer->bank_name,
-                'customer_name' => $transfer->customer_name,
-                'bill_no' => $transfer->bill_no,
-                'amount' => (float)$transfer->given_amount,
-                'date' => $transfer->Date,
-                'notes' => $transfer->transfer_notes,
-                'status' => $transfer->is_fully_paid ? 'cleared' : 'pending'
-            ];
+        // Filter for bank transfer transactions only
+        $transferTransactions = array_filter($transactions, function($transaction) {
+            return !empty($transaction['transfer_reference_no']);
         });
+        
+        // Apply status filter
+        $status = $request->get('status');
+        if ($status === 'pending') {
+            $transferTransactions = array_filter($transferTransactions, function($transaction) {
+                return $transaction['given_amount'] < $transaction['total_payable'];
+            });
+        } elseif ($status === 'cleared') {
+            $transferTransactions = array_filter($transferTransactions, function($transaction) {
+                return $transaction['given_amount'] >= $transaction['total_payable'];
+            });
+        }
+        
+        $transferTransactions = array_values($transferTransactions);
+        
+        // Paginate
+        $perPage = (int)$request->get('per_page', 20);
+        $currentPage = (int)$request->get('page', 1);
+        $offset = ($currentPage - 1) * $perPage;
+        $paginatedItems = array_slice($transferTransactions, $offset, $perPage);
+        
+        $formattedTransfers = [];
+        foreach ($paginatedItems as $transfer) {
+            $isFullyPaid = $transfer['given_amount'] >= $transfer['total_payable'];
+            
+            $formattedTransfers[] = [
+                'id' => $transfer['id'],
+                'reference_no' => $transfer['transfer_reference_no'],
+                'transfer_date' => $transfer['transfer_date'] ?? $transfer['Date'],
+                'bank_name' => $transfer['bank_name'],
+                'customer_name' => $transfer['customer_name'],
+                'bill_no' => $transfer['bill_no'],
+                'amount' => $transfer['given_amount'],
+                'date' => $transfer['Date'],
+                'notes' => $transfer['transfer_notes'],
+                'status' => $isFullyPaid ? 'cleared' : 'pending',
+                'source_table' => $transfer['source']
+            ];
+        }
         
         return response()->json([
             'success' => true,
-            'data' => $transfers
+            'data' => [
+                'current_page' => $currentPage,
+                'data' => $formattedTransfers,
+                'total' => count($transferTransactions),
+                'per_page' => $perPage,
+                'last_page' => ceil(count($transferTransactions) / $perPage)
+            ]
         ]);
     }
     
@@ -639,23 +865,26 @@ public function getAllAccountsStatement(Request $request)
         
         $monthlyData = [];
         for ($month = 1; $month <= 12; $month++) {
-            $startDate = Carbon::create($year, $month, 1)->startOfMonth();
-            $endDate = Carbon::create($year, $month, 1)->endOfMonth();
+            $startDate = Carbon::create($year, $month, 1)->startOfMonth()->format('Y-m-d');
+            $endDate = Carbon::create($year, $month, 1)->endOfMonth()->format('Y-m-d');
             
-            $transactions = Sale::whereNotNull('bank_account_id')
-                ->whereBetween('Date', [$startDate, $endDate])
-                ->get();
+            // Get transactions from all tables for this month
+            $transactions = $this->getCombinedTransactions('all', $startDate, $endDate);
             
-            $totalDebit = $transactions->sum('given_amount');
-            $totalCredit = $transactions->sum('total');
+            $totalDebit = 0;
+            $totalCredit = 0;
+            foreach ($transactions as $transaction) {
+                $totalDebit += $transaction['given_amount'];
+                $totalCredit += $transaction['total_payable'];
+            }
             
             $monthlyData[] = [
-                'month' => $startDate->format('F'),
+                'month' => Carbon::create($year, $month, 1)->format('F'),
                 'month_number' => $month,
-                'total_debit' => (float)$totalDebit,
-                'total_credit' => (float)$totalCredit,
-                'net' => (float)($totalDebit - $totalCredit),
-                'transaction_count' => $transactions->count()
+                'total_debit' => $totalDebit,
+                'total_credit' => $totalCredit,
+                'net' => $totalDebit - $totalCredit,
+                'transaction_count' => count($transactions)
             ];
         }
         
@@ -670,54 +899,47 @@ public function getAllAccountsStatement(Request $request)
      */
     public function exportTransactions(Request $request)
     {
+        $startDate = $request->get('start_date');
+        $endDate = $request->get('end_date');
         $bankAccountId = $request->get('bank_account_id');
         
-        $query = Sale::with(['bankAccount', 'customer']);
-        
-        if ($bankAccountId && $bankAccountId !== 'all') {
-            $query->where('bank_account_id', $bankAccountId);
-        }
-        
-        if ($request->has('start_date')) {
-            $query->whereDate('Date', '>=', $request->start_date);
-        }
-        
-        if ($request->has('end_date')) {
-            $query->whereDate('Date', '<=', $request->end_date);
-        }
-        
-        $transactions = $query->orderBy('Date', 'desc')->get();
+        // Get combined transactions
+        $transactions = $this->getCombinedTransactions($bankAccountId, $startDate, $endDate);
         
         $csvData = [];
         $csvData[] = [
-            'Date', 'Bill No', 'Customer Name', 'Bank Account', 'Payment Method', 'Adjustment Type',
-            'Cheque No', 'Transfer Reference', 'Transfer Date', 'Debit (Dr)', 'Credit (Cr)', 'Balance Status'
+            'Date', 'Bill No', 'Customer/Supplier Name', 'Bank Account', 'Payment Method', 'Adjustment Type',
+            'Cheque No', 'Transfer Reference', 'Transfer Date', 'Debit (Dr)', 'Credit (Cr)', 'Balance Status', 'Source', 'Transaction Type'
         ];
         
         foreach ($transactions as $transaction) {
             $paymentMethod = 'Cash';
-            if ($transaction->transfer_reference_no) {
+            if ($transaction['transfer_reference_no']) {
                 $paymentMethod = 'Bank Transfer';
-            } elseif ($transaction->cheq_no) {
+            } elseif ($transaction['cheq_no']) {
                 $paymentMethod = 'Cheque';
             }
             
-            $bankName = $transaction->bankAccount ? $transaction->bankAccount->bank_name : ($transaction->bank_name ?? 'N/A');
-            $adjustmentType = $transaction->payment_adjustment_type ?? 'none';
+            $bankName = $transaction['bank_name'] ?? 'N/A';
+            $adjustmentType = $transaction['payment_adjustment_type'] ?? 'none';
+            
+            $isFullyPaid = $transaction['given_amount'] >= $transaction['total_payable'];
             
             $csvData[] = [
-                $transaction->Date,
-                $transaction->bill_no,
-                $transaction->customer_name,
+                $transaction['Date'],
+                $transaction['bill_no'] ?? '-',
+                $transaction['customer_name'],
                 $bankName,
                 $paymentMethod,
                 $adjustmentType,
-                $transaction->cheq_no ?? '-',
-                $transaction->transfer_reference_no ?? '-',
-                $transaction->transfer_date ?? '-',
-                $transaction->given_amount > 0 ? $transaction->given_amount : 0,
-                $transaction->total > 0 ? $transaction->total : 0,
-                $transaction->is_fully_paid ? 'Completed' : 'Pending'
+                $transaction['cheq_no'] ?? '-',
+                $transaction['transfer_reference_no'] ?? '-',
+                $transaction['transfer_date'] ?? '-',
+                $transaction['given_amount'] > 0 ? $transaction['given_amount'] : 0,
+                $transaction['total_payable'] > 0 ? $transaction['total_payable'] : 0,
+                $isFullyPaid ? 'Completed' : 'Pending',
+                $transaction['source'],
+                $transaction['type'] ?? 'customer_sale'
             ];
         }
         
@@ -732,9 +954,68 @@ public function getAllAccountsStatement(Request $request)
      */
     public function getTransaction($id)
     {
+        // Try to find in Sales first, then in SalesHistory, then in SupplierLoan, then in SupplierLoanHistory
         $sale = Sale::with(['bankAccount', 'customer'])->find($id);
+        $sourceTable = 'sales';
         
         if (!$sale) {
+            $sale = SalesHistory::with(['bankAccount', 'customer'])->find($id);
+            $sourceTable = 'sales_history';
+        }
+        
+        if (!$sale) {
+            $loan = SupplierLoan::find($id);
+            if ($loan) {
+                return response()->json([
+                    'success' => true,
+                    'data' => [
+                        'id' => $loan->id,
+                        'date' => $loan->realized_date ?? $loan->created_at,
+                        'bill_no' => $loan->bill_no,
+                        'customer_name' => $loan->code,
+                        'customer_code' => $loan->code,
+                        'total_payable' => (float)($loan->total_amount ?? $loan->loan_amount ?? 0),
+                        'given_amount' => 0,
+                        'remaining_amount' => (float)($loan->total_amount ?? $loan->loan_amount ?? 0),
+                        'cheq_no' => $loan->cheque_no,
+                        'payment_method' => $loan->cheque_no ? 'Cheque' : 'Cash',
+                        'payment_adjustment_type' => $loan->type ?? 'supplier_loan',
+                        'adjustment_amount' => (float)($loan->loan_amount ?? 0),
+                        'transfer_notes' => $loan->notes,
+                        'status' => 'completed',
+                        'source_table' => 'supplier_loan',
+                        'transaction_type' => 'supplier_payment'
+                    ]
+                ]);
+            }
+        }
+        
+        if (!$sale) {
+            $loanHistory = SupplierLoanHistory::find($id);
+            if ($loanHistory) {
+                return response()->json([
+                    'success' => true,
+                    'data' => [
+                        'id' => $loanHistory->id,
+                        'date' => $loanHistory->realized_date ?? $loanHistory->created_at,
+                        'bill_no' => $loanHistory->bill_no,
+                        'customer_name' => $loanHistory->code,
+                        'customer_code' => $loanHistory->code,
+                        'total_payable' => (float)($loanHistory->total_amount ?? $loanHistory->loan_amount ?? 0),
+                        'given_amount' => 0,
+                        'remaining_amount' => (float)($loanHistory->total_amount ?? $loanHistory->loan_amount ?? 0),
+                        'cheq_no' => $loanHistory->cheque_no,
+                        'payment_method' => $loanHistory->cheque_no ? 'Cheque' : 'Cash',
+                        'payment_adjustment_type' => $loanHistory->type ?? 'supplier_loan',
+                        'adjustment_amount' => (float)($loanHistory->loan_amount ?? 0),
+                        'transfer_notes' => $loanHistory->notes,
+                        'status' => 'completed',
+                        'source_table' => 'supplier_loan_history',
+                        'transaction_type' => 'supplier_payment'
+                    ]
+                ]);
+            }
+            
             return response()->json([
                 'success' => false,
                 'message' => 'Transaction not found'
@@ -748,6 +1029,11 @@ public function getAllAccountsStatement(Request $request)
             $paymentMethod = 'Cheque';
         }
         
+        $totalPayable = (float)($sale->total ?? 0) + ((float)($sale->packs ?? 0) * (float)($sale->CustomerPackCost ?? 0));
+        $givenAmount = (float)($sale->given_amount ?? 0);
+        $remainingAmount = $totalPayable - $givenAmount;
+        $isFullyPaid = $remainingAmount <= 0;
+        
         return response()->json([
             'success' => true,
             'data' => [
@@ -756,9 +1042,9 @@ public function getAllAccountsStatement(Request $request)
                 'bill_no' => $sale->bill_no,
                 'customer_name' => $sale->customer_name,
                 'customer_code' => $sale->customer_code,
-                'total_payable' => (float)$sale->total_payable,
-                'given_amount' => (float)$sale->given_amount,
-                'remaining_amount' => (float)$sale->remaining_amount,
+                'total_payable' => $totalPayable,
+                'given_amount' => $givenAmount,
+                'remaining_amount' => $remainingAmount,
                 'cheq_no' => $sale->cheq_no,
                 'cheq_date' => $sale->cheq_date,
                 'transfer_reference_no' => $sale->transfer_reference_no,
@@ -768,7 +1054,7 @@ public function getAllAccountsStatement(Request $request)
                 'bank_name' => $sale->bankAccount ? $sale->bankAccount->bank_name : $sale->bank_name,
                 'payment_method' => $paymentMethod,
                 'payment_adjustment_type' => $sale->payment_adjustment_type ?? 'none',
-                'adjustment_amount' => (float)$sale->adjustment_amount,
+                'adjustment_amount' => (float)($sale->adjustment_amount ?? 0),
                 'items' => [
                     'item_name' => $sale->item_name,
                     'weight' => (float)$sale->weight,
@@ -776,7 +1062,9 @@ public function getAllAccountsStatement(Request $request)
                     'total' => (float)$sale->total,
                     'packs' => (int)$sale->packs
                 ],
-                'status' => $sale->is_fully_paid ? 'completed' : ($sale->given_amount > 0 ? 'partial' : 'pending')
+                'status' => $isFullyPaid ? 'completed' : ($givenAmount > 0 ? 'partial' : 'pending'),
+                'source_table' => $sourceTable,
+                'transaction_type' => 'customer_sale'
             ]
         ]);
     }
@@ -795,8 +1083,16 @@ public function getAllAccountsStatement(Request $request)
             ], 404);
         }
         
-        $totalDebit = Sale::where('bank_account_id', $bankAccountId)->sum('given_amount');
-        $totalCredit = Sale::where('bank_account_id', $bankAccountId)->sum('total');
+        // Get all transactions for this bank
+        $transactions = $this->getCombinedTransactions($bankAccountId, null, null);
+        
+        $totalDebit = 0;
+        $totalCredit = 0;
+        foreach ($transactions as $transaction) {
+            $totalDebit += $transaction['given_amount'];
+            $totalCredit += $transaction['total_payable'];
+        }
+        
         $currentBalance = ($bank->opening_balance ?? 0) + ($totalDebit - $totalCredit);
         
         return response()->json([
@@ -804,56 +1100,67 @@ public function getAllAccountsStatement(Request $request)
             'data' => [
                 'bank' => $bank,
                 'opening_balance' => (float)($bank->opening_balance ?? 0),
-                'total_debit' => (float)$totalDebit,
-                'total_credit' => (float)$totalCredit,
-                'current_balance' => (float)$currentBalance
+                'total_debit' => $totalDebit,
+                'total_credit' => $totalCredit,
+                'current_balance' => $currentBalance
             ]
         ]);
     }
     
     /**
-     * Get bank transactions summary - FIXED to include ALL transactions
+     * Get bank transactions summary
      */
     private function getBankTransactions($bankAccountId, $startDate, $endDate)
     {
-        // REMOVED the cheque/transfer filter
-        $transactions = Sale::where('bank_account_id', $bankAccountId)
-            ->whereBetween('Date', [$startDate, $endDate])
-            ->get();
+        $transactions = $this->getCombinedTransactions($bankAccountId, $startDate, $endDate);
         
-        $totalDebit = $transactions->sum('given_amount');
-        $totalCredit = $transactions->sum('total');
+        $totalDebit = 0;
+        $totalCredit = 0;
+        foreach ($transactions as $transaction) {
+            $totalDebit += $transaction['given_amount'];
+            $totalCredit += $transaction['total_payable'];
+        }
+        
         $balance = $totalDebit - $totalCredit;
         
         return [
-            'total_debit' => (float)$totalDebit,
-            'total_credit' => (float)$totalCredit,
-            'balance' => (float)$balance,
-            'count' => $transactions->count()
+            'total_debit' => $totalDebit,
+            'total_credit' => $totalCredit,
+            'balance' => $balance,
+            'count' => count($transactions)
         ];
     }
     
     /**
-     * Get opening balance for a bank account before a specific date - FIXED to include ALL transactions
+     * Get opening balance for a bank account before a specific date
      */
-   private function getOpeningBalance($bankAccountId, $startDate)
-{
-    // Handle NULL bank_account_id case
-    if ($bankAccountId === null || $bankAccountId === 'null') {
-        // For transactions with no bank account, opening balance is 0
-        return 0;
+    private function getOpeningBalance($bankAccountId, $startDate)
+    {
+        // Handle NULL bank_account_id case
+        if (!$bankAccountId || $bankAccountId === 'all' || $bankAccountId === 'null') {
+            return 0;
+        }
+        
+        $bank = Bank::find($bankAccountId);
+        $openingBalance = $bank ? (float)($bank->opening_balance ?? 0) : 0;
+        
+        if (!$startDate) {
+            return $openingBalance;
+        }
+        
+        // Get transactions before the start date
+        $transactions = $this->getCombinedTransactions($bankAccountId, null, $startDate);
+        
+        $totalDebit = 0;
+        $totalCredit = 0;
+        foreach ($transactions as $transaction) {
+            // Only include transactions before the start date (not including the start date)
+            if (strtotime($transaction['Date']) < strtotime($startDate)) {
+                $totalDebit += $transaction['given_amount'];
+                $totalCredit += $transaction['total_payable'];
+            }
+        }
+        
+        return $openingBalance + ($totalDebit - $totalCredit);
     }
-    
-    $bank = Bank::find($bankAccountId);
-    $openingBalance = $bank ? (float)($bank->opening_balance ?? 0) : 0;
-    
-    $previousTransactions = Sale::where('bank_account_id', $bankAccountId)
-        ->whereDate('Date', '<', $startDate)
-        ->get();
-    
-    $totalDebit = $previousTransactions->sum('given_amount');
-    $totalCredit = $previousTransactions->sum('total');
-    
-    return $openingBalance + ($totalDebit - $totalCredit);
-}
 }

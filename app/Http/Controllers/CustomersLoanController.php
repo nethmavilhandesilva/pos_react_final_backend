@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\IC_UtilityType;
 use Illuminate\Http\Request;
 use App\Models\Customer;
 use App\Models\CustomersLoan;
@@ -16,6 +17,9 @@ use Mpdf\Config\FontVariables;
 use Maatwebsite\Excel\Facades\Excel;
 use App\Exports\LoanReportExport;
 use Illuminate\Http\JsonResponse; // Added import for JsonResponse
+use Illuminate\Support\Facades\Log;
+use App\Models\User;
+use Illuminate\Support\Facades\DB;
 
 class CustomersLoanController extends Controller
 {
@@ -136,6 +140,24 @@ class CustomersLoanController extends Controller
 
         $validated = $request->validate($rules);
 
+        // --- Get the authenticated user's user_id ---
+        $authenticatedUser = auth()->user();
+        $userId = null;
+
+        if ($authenticatedUser) {
+            // Get the user_id field (e.g., 'pos12345')
+            $userId = $authenticatedUser->user_id ?? $authenticatedUser->id;
+
+            // Log for debugging
+            \Log::info('Store method - Authenticated user', [
+                'user_id' => $userId,
+                'user_email' => $authenticatedUser->email,
+                'user_role' => $authenticatedUser->role
+            ]);
+        } else {
+            \Log::warning('Store method - No authenticated user found');
+        }
+
         // --- Handle GRN Damage ---
         if ($loanType === 'grn_damage') {
             $grnEntry = GrnEntry::where('code', $validated['wasted_code'])->first();
@@ -170,6 +192,7 @@ class CustomersLoanController extends Controller
             $incomeExpense->type = 'expense';
             $incomeExpense->date = $settingDate;
             $incomeExpense->ip_address = $request->ip();
+            $incomeExpense->user_id = $userId; // Store the user_id
             $incomeExpense->save();
 
             return response()->json(['message' => 'Return record added successfully!'], 201);
@@ -197,6 +220,7 @@ class CustomersLoanController extends Controller
         $incomeExpense->customer_short_name = $customerShortName;
         $incomeExpense->date = $settingDate;
         $incomeExpense->ip_address = $request->ip();
+        $incomeExpense->user_id = $userId; // Store the user_id
 
         if ($loanType === 'ingoing') {
             $incomeExpense->amount = $validated['amount'];
@@ -220,15 +244,14 @@ class CustomersLoanController extends Controller
             $loan->fill($incomeExpense->getAttributes());
             $loan->amount = abs($validated['amount']); // Loans table traditionally stores absolute amount
             $loan->loan_type = $loanType;
+            $loan->user_id = $userId; // Store the user_id in CustomersLoan as well
             $loan->save();
             $incomeExpense->loan_id = $loan->id;
             $incomeExpense->save();
         }
 
-
-       return response()->json([], 201);
+        return response()->json(['success' => true, 'message' => 'Record saved successfully!'], 201);
     }
-
 
     public function updateApi(Request $request, $id)
     {
@@ -317,7 +340,7 @@ class CustomersLoanController extends Controller
             $loan->save();
         }
 
-       return response()->json([], 201);
+        return response()->json([], 201);
 
     }
 
@@ -384,8 +407,8 @@ class CustomersLoanController extends Controller
         $billNos = Sale::distinct()->pluck('bill_no');
         return response()->json($billNos);
     }
-   
-    public function update(Request $request, $id):JsonResponse
+
+    public function update(Request $request, $id): JsonResponse
     {
         // Base validation rules
         $rules = [
@@ -476,27 +499,27 @@ class CustomersLoanController extends Controller
         return response()->json([], 201);
     }
     public function loanReportResults(Request $request)
-{
-    $query = CustomersLoan::query();
+    {
+        $query = CustomersLoan::query();
 
-    if ($request->filled('customer_short_name')) {
-        $query->where('customer_short_name', $request->customer_short_name);
+        if ($request->filled('customer_short_name')) {
+            $query->where('customer_short_name', $request->customer_short_name);
+        }
+
+        if ($request->filled('start_date') && $request->filled('end_date')) {
+            $query->whereBetween('Date', [$request->start_date, $request->end_date]);
+        }
+
+        $loans = $query->orderBy('Date', 'asc')->get();
+
+        // Return JSON instead of a View
+        return response()->json([
+            'loans' => $loans,
+            'companyName' => Setting::value('CompanyName') ?? 'Default Company',
+            'settingDate' => Setting::value('value') ?? now()->toDateString()
+        ]);
     }
-
-    if ($request->filled('start_date') && $request->filled('end_date')) {
-        $query->whereBetween('Date', [$request->start_date, $request->end_date]);
-    }
-
-    $loans = $query->orderBy('Date', 'asc')->get();
-
-    // Return JSON instead of a View
-    return response()->json([
-        'loans' => $loans,
-        'companyName' => Setting::value('CompanyName') ?? 'Default Company',
-        'settingDate' => \App\Models\Setting::value('value') ?? now()->toDateString()
-    ]);
-}
-public function getLoanReportData(Request $request)
+    public function getLoanReportData(Request $request)
     {
         $query = CustomersLoan::query();
 
@@ -522,4 +545,179 @@ public function getLoanReportData(Request $request)
             'reportDate' => Carbon::parse($settingDate)->format('Y-m-d'),
         ]);
     }
+    // Add this method to your CustomersLoanController.php
+    public function getIncomeTypes(): JsonResponse
+    {
+        try {
+            $types = IC_UtilityType::where('type', 'income')
+                ->where('is_active', true)
+                ->orderBy('name')
+                ->get(['id', 'name']);
+
+            return response()->json([
+                'success' => true,
+                'data' => $types
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch income types'
+            ], 500);
+        }
+    }
+
+    public function getExpenseTypes(): JsonResponse
+    {
+        try {
+            $types = IC_UtilityType::where('type', 'expense')
+                ->where('is_active', true)
+                ->orderBy('name')
+                ->get(['id', 'name']);
+
+            return response()->json([
+                'success' => true,
+                'data' => $types
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch expense types'
+            ], 500);
+        }
+    }
+        public function getIncomeExpenseReport(Request $request): JsonResponse
+    {
+        try {
+            $query = IncomeExpenses::with('customer');
+            
+            // Filter by date range
+            if ($request->filled('start_date')) {
+                $query->whereDate('Date', '>=', $request->start_date);
+            }
+            if ($request->filled('end_date')) {
+                $query->whereDate('Date', '<=', $request->end_date);
+            }
+            
+            // Filter by transaction type (income/expense)
+            if ($request->filled('transaction_type')) {
+                if ($request->transaction_type === 'income') {
+                    $query->where('loan_type', 'ingoing');
+                } elseif ($request->transaction_type === 'expense') {
+                    $query->where('loan_type', 'outgoing');
+                }
+            } else {
+                // Default: show both income and expense
+                $query->whereIn('loan_type', ['ingoing', 'outgoing']);
+            }
+            
+            // Filter by user (only show current user's transactions)
+            if ($request->boolean('my_transactions') && $request->filled('user_id')) {
+                $query->where('user_id', $request->user_id);
+            }
+            
+            // Get all records
+            $transactions = $query->orderBy('Date', 'desc')
+                ->orderBy('created_at', 'desc')
+                ->get();
+            
+            // Calculate totals
+            $totalIncome = 0;
+            $totalExpense = 0;
+            $netBalance = 0;
+            
+            foreach ($transactions as $transaction) {
+                if ($transaction->loan_type === 'ingoing') {
+                    $totalIncome += abs($transaction->amount);
+                } elseif ($transaction->loan_type === 'outgoing') {
+                    $totalExpense += abs($transaction->amount);
+                }
+            }
+            $netBalance = $totalIncome - $totalExpense;
+            
+            // Get available users for filter (users who have transactions)
+            $users = User::whereHas('incomeExpenses', function($q) {
+                $q->whereIn('loan_type', ['ingoing', 'outgoing']);
+            })->get(['id', 'user_id', 'name', 'email']);
+            
+            // Get date range for the report
+            $dateRange = [
+                'min_date' => IncomeExpenses::whereIn('loan_type', ['ingoing', 'outgoing'])->min('Date'),
+                'max_date' => IncomeExpenses::whereIn('loan_type', ['ingoing', 'outgoing'])->max('Date'),
+            ];
+            
+            return response()->json([
+                'success' => true,
+                'data' => $transactions,
+                'summary' => [
+                    'total_income' => $totalIncome,
+                    'total_expense' => $totalExpense,
+                    'net_balance' => $netBalance,
+                    'total_transactions' => $transactions->count(),
+                    'income_count' => $transactions->where('loan_type', 'ingoing')->count(),
+                    'expense_count' => $transactions->where('loan_type', 'outgoing')->count(),
+                ],
+                'users' => $users,
+                'date_range' => $dateRange,
+                'filters' => [
+                    'start_date' => $request->start_date,
+                    'end_date' => $request->end_date,
+                    'transaction_type' => $request->transaction_type,
+                    'my_transactions' => $request->boolean('my_transactions'),
+                    'user_id' => $request->user_id,
+                ]
+            ]);
+            
+        } catch (\Exception $e) {
+            Log::error('Error fetching income/expense report: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch report',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+    
+    /**
+     * Get income and expense summary by category (description)
+     */
+    public function getCategorySummary(Request $request): JsonResponse
+    {
+        try {
+            $query = IncomeExpenses::whereIn('loan_type', ['ingoing', 'outgoing']);
+            
+            if ($request->filled('start_date')) {
+                $query->whereDate('Date', '>=', $request->start_date);
+            }
+            if ($request->filled('end_date')) {
+                $query->whereDate('Date', '<=', $request->end_date);
+            }
+            if ($request->boolean('my_transactions') && $request->filled('user_id')) {
+                $query->where('user_id', $request->user_id);
+            }
+            
+            // Group by description and loan_type
+            $incomeByCategory = $query->where('loan_type', 'ingoing')
+                ->select('description', DB::raw('SUM(amount) as total'))
+                ->groupBy('description')
+                ->get();
+                
+            $expenseByCategory = $query->where('loan_type', 'outgoing')
+                ->select('description', DB::raw('SUM(ABS(amount)) as total'))
+                ->groupBy('description')
+                ->get();
+            
+            return response()->json([
+                'success' => true,
+                'income_by_category' => $incomeByCategory,
+                'expense_by_category' => $expenseByCategory,
+            ]);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch category summary'
+            ], 500);
+        }
+    }
+    
 }
