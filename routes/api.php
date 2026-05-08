@@ -68,11 +68,6 @@ Route::get('/public/supplier-bill/{token}', function ($token) {
     return DB::table('supplier_bill_links')->where('token', $token)->first();
 });
 
-// ======================================================================
-// ✅ IMPORTANT: SupplierLoanController PUBLIC ROUTES (if any)
-// ======================================================================
-// (None needed - all are protected)
-
 // ----------------------------------------------------------------------
 // ✅ PROTECTED ROUTES (Requires 'auth:sanctum') 
 // ----------------------------------------------------------------------
@@ -93,55 +88,56 @@ Route::middleware('auth:sanctum')->group(function () {
         ]);
     });
 
-    // CUSTOMERS
+    // ==================== CUSTOMER ROUTES ====================
     Route::get('/customers', [CustomerController::class, 'apiIndex']);
     Route::post('/customers', [CustomerController::class, 'apiStore']);
     Route::post('/customers/update/{customer}', [CustomerController::class, 'apiUpdate']);
     Route::delete('/customers/{customer}', [CustomerController::class, 'apiDestroy']);
+    Route::get('/customers/debtor-status/{short_name}', [CustomerController::class, 'getDebtorStatus']);
+    Route::put('/customers/update-debtor-status', [CustomerController::class, 'updateDebtorStatus']);
 
-    // ITEMS
+    // ==================== ITEM ROUTES ====================
     Route::apiResource('items', ItemController::class);
     Route::get('items/search/{query}', [ItemController::class, 'search']);
 
-    // ----------------------------------------------------------------------
-    // SUPPLIER ROUTES (IMPORTANT: Specific routes BEFORE apiResource)
-    // ----------------------------------------------------------------------
-
+    // ==================== SUPPLIER ROUTES ====================
     // 🔴 CRITICAL: These specific routes MUST come BEFORE Route::apiResource
     Route::get('/suppliers/loan-summary', [SupplierLoanController::class, 'getLoanSummary']);
     Route::get('/suppliers/all-codes', [SupplierLoanController::class, 'getAllCodes']);
     Route::get('/suppliers/full-report', [SupplierLoanController::class, 'getFarmerFullReport']);
     Route::get('/suppliers/bill-status-summary', [SupplierController::class, 'getSupplierBillStatusSummary']);
-    Route::get('/suppliers/supplierloans', [SupplierLoanController::class, 'getSupplierBillStatusSummary2']);
+    Route::get('/suppliers/supplierloans', [SupplierLoanController::class, 'getSupplierLoansSummary']);
     Route::get('/suppliers/{supplierCode}/details', [SupplierController::class, 'getSupplierDetails']);
     Route::post('/suppliers/delete-loan-record', [SupplierLoanController::class, 'deleteLoanRecord']);
+    Route::get('/suppliers/bill/{billNo}/details', [SupplierLoanController::class, 'getSupplierBillDetails']);
+    Route::get('/suppliers/unprinted-details/{supplierCode}', [SupplierLoanController::class, 'getUnprintedDetails']);
 
     // Default REST API (must come AFTER specific routes)
     Route::apiResource('suppliers', SupplierController::class);
     Route::get('suppliers/search/{query}', [SupplierController::class, 'search']);
 
-    // ----------------------------------------------------------------------
-    // GRN ENTRY ROUTES
-    // ----------------------------------------------------------------------
+    // ==================== GRN ENTRY ROUTES ====================
     Route::get('/grn-entries/latest', [GrnEntryController::class, 'getLatestEntries']);
     Route::get('/grn-entries/create-data', [GrnEntryController::class, 'createData']);
     Route::get('/grn-entries/code/{code}', [GrnEntryController::class, 'getByCode']);
     Route::apiResource('grn-entries', GrnEntryController::class);
 
-    // CUSTOMER LOANS
+    // ==================== CUSTOMER LOANS ROUTES ====================
     Route::get('/customers-loans', [CustomersLoanController::class, 'index']);
     Route::post('/customers-loans', [CustomersLoanController::class, 'store']);
     Route::get('/customers-loans/{customerId}/total', [CustomersLoanController::class, 'getCustomerLoanTotal']);
     Route::put('/customers-loans/{id}', [CustomersLoanController::class, 'update']);
     Route::delete('/customers-loans/{id}', [CustomersLoanController::class, 'destroy']);
+    Route::get('/customers-loans/data', [CustomersLoanController::class, 'getInitialData']);
+    Route::get('/customers-loans/index', [CustomersLoanController::class, 'index']);
 
-    // GRN UPDATE
+    // ==================== GRN UPDATE ROUTES ====================
     Route::get('/not-changing-grns', [GrnEntryController::class, 'getNotChangingGRNs']);
     Route::get('/grn/balance/{code}', [GrnEntryController::class, 'getGrnBalance']);
     Route::post('/grn/store2', [GrnEntryController::class, 'store2']);
     Route::delete('/grn/delete/update/{id}', [GrnEntryController::class, 'destroyupdate']);
 
-    // REPORTS
+    // ==================== REPORT ROUTES ====================
     Route::get('/allitems', [ReportController::class, 'fetchItems']);
     Route::get('/item-report', [ReportController::class, 'itemReport']);
     Route::post('/report/weight', [ReportController::class, 'getweight']);
@@ -155,6 +151,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/bill-numbers', [ReportController::class, 'getBillNumbers']);
     Route::get('/company-info', [ReportController::class, 'getCompanyInfo']);
     Route::get('/sales-report', [ReportController::class, 'salesReport']);
+    Route::get('/supplier-report', [ReportController::class, 'getSupplierReport']);
+    Route::get('/sales/payment-report', [SalesEntryController::class, 'getPaymentReport']);
+    Route::get('/sales/dashboard-stats', [SalesEntryController::class, 'getDashboardStats']);
 
     Route::prefix('reports')->group(function () {
         Route::post('/generate', [ReportController::class, 'generateReport']);
@@ -162,14 +161,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/download-excel', [ReportController::class, 'downloadExcel']);
     });
 
-    // LOAN REPORT
+    // ==================== LOAN REPORT ====================
     Route::get('/customers-loans/report', [ReportController::class, 'loanReport']);
 
-    // GRN REPORT
+    // ==================== GRN REPORT ====================
     Route::get('/grn-codes', [ReportController::class, 'fetchGrnCodes']);
     Route::get('/grn-report', [ReportController::class, 'grnReport2']);
     Route::get('/financial-report', [ReportController2::class, 'getFinancialData']);
 
+    // ==================== SETTINGS ====================
     Route::get('/settings', function () {
         $setting = Setting::first();
         if (!$setting) {
@@ -181,14 +181,12 @@ Route::middleware('auth:sanctum')->group(function () {
         ]);
     });
 
-    // ======================================================================
-    // CASHIER DASHBOARD ROUTES
-    // ======================================================================
-
+    // ==================== CASHIER DASHBOARD ROUTES ====================
     Route::get('/sales/all', [SalesEntryController::class, 'getAllSales2'])->name('sales.all');
     Route::put('/sales/update-given-amount-applied', [SalesEntryController::class, 'updateGivenAmountApplied'])->name('sales.update-given-amount-applied');
     Route::get('/sales/payment-history/{billNo}', [SalesEntryController::class, 'getPaymentHistory'])->name('sales.payment-history');
     Route::put('/sales/{saleId}/given-amount', [SalesEntryController::class, 'updateSaleGivenAmount'])->name('sales.update-sale-given-amount')->where('saleId', '[0-9]+');
+    Route::delete('/sales/delete-bill-payments/{billNo}', [SalesEntryController::class, 'deleteBillPayments']);
 
     Route::get('/sales', [SalesEntryController::class, 'index']);
     Route::post('/sales', [SalesEntryController::class, 'store']);
@@ -199,10 +197,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/sales/mark-all-processed', [SalesEntryController::class, 'markAllAsProcessed']);
     Route::post('/get-loan-amount', [SalesEntryController::class, 'getLoanAmount']);
 
-    // COMMISSIONS (CRUD)
+    // ==================== COMMISSIONS (CRUD) ====================
     Route::resource('commissions', CommissionController::class)->except(['create', 'edit']);
 
-    //supplier bill number
+    // ==================== SUPPLIER BILL NUMBER ====================
     Route::get('/generate-f-series-bill', [SupplierController::class, 'generateFSeriesBill']);
     Route::get('sales/profit-by-supplier', [SupplierController::class, 'getProfitBySupplier']);
     Route::post('/suppliers/mark-as-printed', [SupplierController::class, 'marksuppliers']);
@@ -210,25 +208,20 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/suppliers/{supplierCode}/unprinted-details', [SupplierController::class, 'getUnprintedDetails']);
     Route::get('/suppliers/{supplierCode}/unprinted-details2', [SupplierController::class, 'getUnprintedDetails2']);
 
-    //Day Process
+    // ==================== DAY PROCESS ====================
     Route::post('/sales/process-day', [SalesEntryController::class, 'processDay']);
 
-    //loan section
-    Route::get('/customers-loans/data', [CustomersLoanController::class, 'getInitialData']);
-    Route::get('/customers-loans/index', [CustomersLoanController::class, 'index']);
-    Route::post('/customers-loans', [CustomersLoanController::class, 'store']);
+    // ==================== LOAN SECTION ====================
     Route::post('/customers-loans/{id}', [CustomersLoanController::class, 'updateApi']);
-    Route::delete('/customers-loans/{id}', [CustomersLoanController::class, 'destroy']);
     Route::get('/customers/{customerId}/loans-total', [CustomersLoanController::class, 'getTotalLoanAmount']);
     Route::post('/settings/updateBalance', [CustomersLoanController::class, 'updateBalance']);
     Route::get('/api/grn-entry/{code}', [CustomersLoanController::class, 'getGrnEntry']);
     Route::get('/api/all-bill-nos', [CustomersLoanController::class, 'getAllBillNos']);
-    Route::put('/customers-loans/{id}', [CustomersLoanController::class, 'update']);
     Route::post('/loan-report-results', [CustomersLoanController::class, 'getLoanReportData']);
     Route::get('/utility-types/income', [CustomersLoanController::class, 'getIncomeTypes']);
     Route::get('/utility-types/expense', [CustomersLoanController::class, 'getExpenseTypes']);
 
-    //update given amount
+    // ==================== UPDATE GIVEN AMOUNT ====================
     Route::get('/sales/customer/given-amount/{customerCode}', function ($customerCode) {
         $sales = \App\Models\Sale::where('customer_code', $customerCode)
             ->whereNotNull('given_amount')
@@ -260,12 +253,7 @@ Route::middleware('auth:sanctum')->group(function () {
         ]);
     });
 
-    Route::get('/supplier-report', [ReportController::class, 'getSupplierReport']);
-
-    // ======================================================================
-    // 🏦 BANK ROUTES (Protected)
-    // ======================================================================
-
+    // ==================== BANK ROUTES ====================
     Route::prefix('banks')->group(function () {
         Route::get('/', [BankController::class, 'index']);
         Route::get('/list', [BankController::class, 'getBanksList']);
@@ -286,20 +274,18 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/bank-transfers', [BankController::class, 'getBankTransferReport']);
         Route::get('/monthly-summary', [BankController::class, 'getMonthlySummary']);
         Route::get('/export', [BankController::class, 'exportTransactions']);
+        Route::get('/cheques-report', [BankController::class, 'getChequePaymentsReport']);
     });
 
-    // Adjustment routes
+    // ==================== ADJUSTMENT ROUTES ====================
     Route::get('/adjustments/pending-customer-bills', [SalesEntryController::class, 'getPendingCustomerBills']);
     Route::get('/adjustments/pending-farmer-bills', [SalesEntryController::class, 'getPendingFarmerBills']);
     Route::post('/adjustments/apply', [SalesEntryController::class, 'applyPaymentAdjustment']);
 
-    // ======================================================================
-    // SUPPLIER LOAN ROUTES WITH PAYMENT METHODS (Protected)
-    // ======================================================================
-
+    // ==================== SUPPLIER LOAN ROUTES (CRITICAL: Order matters!) ====================
     // IMPORTANT: These specific routes should come before any wildcard routes
-    Route::get('/supplier-loan/payment-history', [SupplierLoanController::class, 'getPaymentHistory']);
     Route::get('/supplier-loan/search', [SupplierLoanController::class, 'findLoan']);
+    Route::get('/supplier-loan/payment-history', [SupplierLoanController::class, 'getPaymentHistory']);
     Route::get('/supplier-loan/supplier/{code}', [SupplierLoanController::class, 'getBySupplier']);
     Route::get('/supplier-loan/supplier/{code}/total', [SupplierLoanController::class, 'getTotalLoan']);
     Route::get('/supplier-loan/bill/{billNo}', [SupplierLoanController::class, 'getByBillNo']);
@@ -313,11 +299,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/banks-list', [SupplierLoanController::class, 'getBanks']);
     Route::get('/pending-customer-bills', [SupplierLoanController::class, 'getPendingCustomerBills']);
     Route::get('/pending-farmer-bills', [SupplierLoanController::class, 'getPendingFarmerBills']);
+    
+    // Supplier Loan Summary Routes (must come AFTER specific routes)
+    Route::get('/suppliers/supplierloans-summary', [SupplierLoanController::class, 'getSupplierLoansSummary']);
+    Route::get('/supplier-loan/loan-summary', [SupplierLoanController::class, 'getLoanSummary']);
 
-    // ======================================================================
-    // FARMER LOAN ROUTES (Protected)
-    // ======================================================================
-
+    // ==================== FARMER LOAN ROUTES ====================
     Route::prefix('farmer-loans')->group(function () {
         Route::post('/', [FarmerLoanController::class, 'store']);
         Route::get('/data', [FarmerLoanController::class, 'getLoansData']);
@@ -330,12 +317,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/all-balances', [FarmerLoanController::class, 'getAllFarmersBalances']);
     });
 
-    // Cashier reports
+    // ==================== CASHIER REPORTS ====================
     Route::get('/payment-collection-report', [SalesEntryController::class, 'getPaymentCollectionReport']);
     Route::get('/payment-breakdown', [SalesEntryController::class, 'getPaymentBreakdown']);
-    //supplier transaction reports
-    Route::get('/payment-collection-report', [SupplierLoanController::class, 'getPaymentCollectionReport']);
+    Route::get('/supplier-payment-collection-report', [SupplierLoanController::class, 'getPaymentCollectionReport']);
     Route::get('/payment-details-by-bill', [SupplierLoanController::class, 'getPaymentDetailsByBill']);
+
+    // ==================== UTILITY TYPES ====================
     Route::prefix('utility-types')->group(function () {
         Route::get('/', [IC_UtilityTypeController::class, 'index']);
         Route::post('/', [IC_UtilityTypeController::class, 'store']);
@@ -347,8 +335,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/bulk-delete', [IC_UtilityTypeController::class, 'bulkDelete']);
         Route::patch('/{id}/toggle-status', [IC_UtilityTypeController::class, 'toggleStatus']);
     });
- //Income expense report routes
-Route::get('/income-expense-report', [CustomersLoanController::class, 'getIncomeExpenseReport']);
-Route::get('/income-expense-category-summary', [CustomersLoanController::class, 'getCategorySummary']);
-Route::get('/income-expense-export', [CustomersLoanController::class, 'exportReport']);   
+
+    // ==================== INCOME EXPENSE REPORT ROUTES ====================
+    Route::get('/income-expense-report', [CustomersLoanController::class, 'getIncomeExpenseReport']);
+    Route::get('/income-expense-category-summary', [CustomersLoanController::class, 'getCategorySummary']);
+    Route::get('/income-expense-export', [CustomersLoanController::class, 'exportReport']);
 });

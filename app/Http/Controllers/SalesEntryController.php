@@ -2198,4 +2198,388 @@ public function getPaymentCollectionReport(Request $request)
         ], 500);
     }
 }
+/**
+ * Get comprehensive payment report with summaries
+ */
+public function getPaymentReport(Request $request)
+{
+    try {
+        $period = $request->input('period', 'today'); // today, week, month, custom
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
+        
+        // Determine date range based on period
+        $today = Carbon::today();
+        switch ($period) {
+            case 'today':
+                $startDate = $today->format('Y-m-d');
+                $endDate = $today->format('Y-m-d');
+                break;
+            case 'week':
+                $startDate = $today->copy()->startOfWeek()->format('Y-m-d');
+                $endDate = $today->copy()->endOfWeek()->format('Y-m-d');
+                break;
+            case 'month':
+                $startDate = $today->copy()->startOfMonth()->format('Y-m-d');
+                $endDate = $today->copy()->endOfMonth()->format('Y-m-d');
+                break;
+            case 'custom':
+                // Use provided dates
+                break;
+        }
+        
+        // Query current sales table
+        $query = Sale::where('bill_printed', 'Y')
+            ->whereNotNull('bill_no');
+        
+        if ($startDate) {
+            $query->whereDate('Date', '>=', $startDate);
+        }
+        if ($endDate) {
+            $query->whereDate('Date', '<=', $endDate);
+        }
+        
+        $sales = $query->get();
+        
+        // Initialize report data
+        $report = [
+            'summary' => [
+                'cash_collection' => 0,
+                'cheque_collection' => 0,
+                'bank_transfer_collection' => 0,
+                'bag_to_box_total' => 0,
+                'bill_to_bill_total' => 0,
+                'bad_debt_total' => 0,
+                'total_given_amount' => 0,
+                'total_bill_amount' => 0,
+                'total_remaining' => 0,
+                'total_customers' => 0,
+                'total_bills' => 0,
+            ],
+            'breakdown_by_customer' => [],
+            'breakdown_by_date' => [],
+            'breakdown_by_payment_type' => [],
+            'graph_data' => [
+                'labels' => [],
+                'cash' => [],
+                'cheque' => [],
+                'bank_transfer' => [],
+                'adjustments' => [],
+            ]
+        ];
+        
+        $customerSummary = [];
+        $dateSummary = [];
+        $paymentTypeSummary = [
+            'Cash' => 0,
+            'Cheque' => 0,
+            'Bank Transfer' => 0,
+            'bag_to_box' => 0,
+            'bill_to_bill' => 0,
+            'bad_debt' => 0,
+        ];
+        
+        foreach ($sales as $sale) {
+            $paymentType = $sale->payment_adjustment_type;
+            $givenAmount = floatval($sale->given_amount ?? 0);
+            $adjustmentAmount = floatval($sale->adjustment_amount ?? 0);
+            $billTotal = $sale->total_payable;
+            $dateKey = $sale->Date ?? $sale->created_at->format('Y-m-d');
+            $customerCode = $sale->customer_code ?? 'Unknown';
+            
+            // Update totals
+            $report['summary']['total_given_amount'] += $givenAmount;
+            $report['summary']['total_bill_amount'] += $billTotal;
+            
+            // Categorize by payment type
+            if ($paymentType === 'cash' || $paymentType === 'Cash' || ($paymentType === null && $givenAmount > 0)) {
+                $report['summary']['cash_collection'] += $givenAmount;
+                $paymentTypeSummary['Cash'] += $givenAmount;
+            } elseif ($paymentType === 'cheque' || $paymentType === 'Cheque') {
+                $report['summary']['cheque_collection'] += $givenAmount;
+                $paymentTypeSummary['Cheque'] += $givenAmount;
+            } elseif ($paymentType === 'Bank Transfer' || $paymentType === 'bank_transfer') {
+                $report['summary']['bank_transfer_collection'] += $givenAmount;
+                $paymentTypeSummary['Bank Transfer'] += $givenAmount;
+            } elseif ($paymentType === 'bag_to_box') {
+                $report['summary']['bag_to_box_total'] += $adjustmentAmount;
+                $paymentTypeSummary['bag_to_box'] += $adjustmentAmount;
+            } elseif ($paymentType === 'bill_to_bill') {
+                $report['summary']['bill_to_bill_total'] += $adjustmentAmount;
+                $paymentTypeSummary['bill_to_bill'] += $adjustmentAmount;
+            } elseif ($paymentType === 'bad_debt') {
+                $report['summary']['bad_debt_total'] += $adjustmentAmount;
+                $paymentTypeSummary['bad_debt'] += $adjustmentAmount;
+            }
+            
+            // Customer breakdown
+            if (!isset($customerSummary[$customerCode])) {
+                $customerSummary[$customerCode] = [
+                    'customer_code' => $customerCode,
+                    'total_bill' => 0,
+                    'total_given' => 0,
+                    'cash_paid' => 0,
+                    'cheque_paid' => 0,
+                    'bank_transfer_paid' => 0,
+                    'adjustments' => 0,
+                    'remaining' => 0,
+                    'bill_count' => 0,
+                ];
+                $report['summary']['total_customers']++;
+            }
+            
+            $customerSummary[$customerCode]['total_bill'] += $billTotal;
+            $customerSummary[$customerCode]['total_given'] += $givenAmount;
+            $customerSummary[$customerCode]['bill_count']++;
+            
+            if ($paymentType === 'cash' || $paymentType === 'Cash' || ($paymentType === null && $givenAmount > 0)) {
+                $customerSummary[$customerCode]['cash_paid'] += $givenAmount;
+            } elseif ($paymentType === 'cheque' || $paymentType === 'Cheque') {
+                $customerSummary[$customerCode]['cheque_paid'] += $givenAmount;
+            } elseif ($paymentType === 'Bank Transfer' || $paymentType === 'bank_transfer') {
+                $customerSummary[$customerCode]['bank_transfer_paid'] += $givenAmount;
+            } elseif (in_array($paymentType, ['bag_to_box', 'bill_to_bill', 'bad_debt'])) {
+                $customerSummary[$customerCode]['adjustments'] += $adjustmentAmount;
+            }
+            
+            $customerSummary[$customerCode]['remaining'] = $customerSummary[$customerCode]['total_bill'] - $customerSummary[$customerCode]['total_given'];
+            
+            // Date breakdown
+            if (!isset($dateSummary[$dateKey])) {
+                $dateSummary[$dateKey] = [
+                    'date' => $dateKey,
+                    'cash' => 0,
+                    'cheque' => 0,
+                    'bank_transfer' => 0,
+                    'adjustments' => 0,
+                    'total' => 0,
+                ];
+            }
+            
+            if ($paymentType === 'cash' || $paymentType === 'Cash' || ($paymentType === null && $givenAmount > 0)) {
+                $dateSummary[$dateKey]['cash'] += $givenAmount;
+            } elseif ($paymentType === 'cheque' || $paymentType === 'Cheque') {
+                $dateSummary[$dateKey]['cheque'] += $givenAmount;
+            } elseif ($paymentType === 'Bank Transfer' || $paymentType === 'bank_transfer') {
+                $dateSummary[$dateKey]['bank_transfer'] += $givenAmount;
+            } elseif (in_array($paymentType, ['bag_to_box', 'bill_to_bill', 'bad_debt'])) {
+                $dateSummary[$dateKey]['adjustments'] += $adjustmentAmount;
+            }
+            $dateSummary[$dateKey]['total'] += $givenAmount + $adjustmentAmount;
+        }
+        
+        // Calculate total remaining
+        $report['summary']['total_remaining'] = $report['summary']['total_bill_amount'] - $report['summary']['total_given_amount'];
+        $report['summary']['total_bills'] = $sales->unique('bill_no')->count();
+        
+        // Prepare breakdown arrays
+        $report['breakdown_by_customer'] = array_values($customerSummary);
+        $report['breakdown_by_date'] = array_values($dateSummary);
+        $report['breakdown_by_payment_type'] = $paymentTypeSummary;
+        
+        // Prepare graph data (last 7 days)
+        $graphLabels = [];
+        $graphCash = [];
+        $graphCheque = [];
+        $graphBankTransfer = [];
+        $graphAdjustments = [];
+        
+        for ($i = 6; $i >= 0; $i--) {
+            $date = $today->copy()->subDays($i)->format('Y-m-d');
+            $graphLabels[] = $today->copy()->subDays($i)->format('M d');
+            
+            $dayData = $dateSummary[$date] ?? ['cash' => 0, 'cheque' => 0, 'bank_transfer' => 0, 'adjustments' => 0];
+            $graphCash[] = $dayData['cash'];
+            $graphCheque[] = $dayData['cheque'];
+            $graphBankTransfer[] = $dayData['bank_transfer'];
+            $graphAdjustments[] = $dayData['adjustments'];
+        }
+        
+        $report['graph_data'] = [
+            'labels' => $graphLabels,
+            'cash' => $graphCash,
+            'cheque' => $graphCheque,
+            'bank_transfer' => $graphBankTransfer,
+            'adjustments' => $graphAdjustments,
+        ];
+        
+        return response()->json([
+            'success' => true,
+            'report' => $report,
+            'period' => $period,
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+        ]);
+        
+    } catch (\Exception $e) {
+        \Log::error('Failed to generate payment report: ' . $e->getMessage());
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to generate report: ' . $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Get dashboard statistics
+ */
+public function getDashboardStats(Request $request)
+{
+    try {
+        $today = Carbon::today();
+        
+        // Today's stats
+        $todaySales = Sale::where('bill_printed', 'Y')
+            ->whereDate('Date', $today)
+            ->get();
+        
+        // This week's stats
+        $weekStart = $today->copy()->startOfWeek();
+        $weekEnd = $today->copy()->endOfWeek();
+        $weekSales = Sale::where('bill_printed', 'Y')
+            ->whereBetween('Date', [$weekStart, $weekEnd])
+            ->get();
+        
+        // This month's stats
+        $monthStart = $today->copy()->startOfMonth();
+        $monthEnd = $today->copy()->endOfMonth();
+        $monthSales = Sale::where('bill_printed', 'Y')
+            ->whereBetween('Date', [$monthStart, $monthEnd])
+            ->get();
+        
+        // Helper function to calculate stats
+        $calculateStats = function($sales) {
+            $cash = 0;
+            $cheque = 0;
+            $bankTransfer = 0;
+            $bagToBox = 0;
+            $billToBill = 0;
+            $badDebt = 0;
+            $totalGiven = 0;
+            
+            foreach ($sales as $sale) {
+                $paymentType = $sale->payment_adjustment_type;
+                $givenAmount = floatval($sale->given_amount ?? 0);
+                $adjustmentAmount = floatval($sale->adjustment_amount ?? 0);
+                $totalGiven += $givenAmount;
+                
+                if ($paymentType === 'cash' || $paymentType === 'Cash' || ($paymentType === null && $givenAmount > 0)) {
+                    $cash += $givenAmount;
+                } elseif ($paymentType === 'cheque' || $paymentType === 'Cheque') {
+                    $cheque += $givenAmount;
+                } elseif ($paymentType === 'Bank Transfer' || $paymentType === 'bank_transfer') {
+                    $bankTransfer += $givenAmount;
+                } elseif ($paymentType === 'bag_to_box') {
+                    $bagToBox += $adjustmentAmount;
+                } elseif ($paymentType === 'bill_to_bill') {
+                    $billToBill += $adjustmentAmount;
+                } elseif ($paymentType === 'bad_debt') {
+                    $badDebt += $adjustmentAmount;
+                }
+            }
+            
+            return [
+                'cash' => $cash,
+                'cheque' => $cheque,
+                'bank_transfer' => $bankTransfer,
+                'bag_to_box' => $bagToBox,
+                'bill_to_bill' => $billToBill,
+                'bad_debt' => $badDebt,
+                'total_given' => $totalGiven,
+                'transactions' => $sales->count(),
+                'bills' => $sales->unique('bill_no')->count(),
+            ];
+        };
+        
+        return response()->json([
+            'success' => true,
+            'today' => $calculateStats($todaySales),
+            'week' => $calculateStats($weekSales),
+            'month' => $calculateStats($monthSales),
+            'pending_bills' => Sale::where('bill_printed', 'Y')
+                ->where('given_amount_applied', 'N')
+                ->distinct('bill_no')
+                ->count('bill_no'),
+            'total_customers' => Customer::count(),
+            'debtors_count' => Customer::where('Debtor', 'Y')->count(),
+        ]);
+        
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to get dashboard stats: ' . $e->getMessage()
+        ], 500);
+    }
+}
+/**
+ * Delete all payments for a specific bill (reverse the payment operation)
+ */
+/**
+ * Delete all payments for a specific bill (reverse the payment operation)
+ */
+public function deleteBillPayments($billNo)
+{
+    try {
+        DB::beginTransaction();
+        
+        // Find all sales records for this bill
+        $sales = Sale::where('bill_no', $billNo)
+            ->where('bill_printed', 'Y')
+            ->get();
+        
+        if ($sales->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No sales found for this bill number'
+            ], 404);
+        }
+        
+        // Reset all payment-related fields to their original state (before any payments)
+        foreach ($sales as $sale) {
+            $sale->update([
+                'given_amount' => 0,
+                'given_amount_applied' => 'N',
+                'credit_transaction' => 'Y',
+                'payment_adjustment_type' => null,
+                'adjustment_amount' => 0,
+                'payment_history' => null,
+                'cheq_date' => null,
+                'cheq_no' => null,
+                'bank_account_id' => null,
+                'bank_name' => null,
+                'transfer_reference_no' => null,
+                'transfer_date' => null,
+                'transfer_notes' => null,
+                'bag_count' => null,
+                'box_count' => null,
+                'bag_value' => null,
+                'box_value' => null,
+                'target_customer_code' => null,
+                'target_bill_no' => null,
+                'target_bill_value' => null,
+                'target_supplier_code' => null,
+                'target_supplier_bill_no' => null,
+                'target_supplier_bill_value' => null,
+                'bad_debt_name' => null,
+                'bad_debt_amount' => null,
+            ]);
+        }
+        
+        DB::commit();    
+        return response()->json([
+            'success' => true,
+            'message' => "All payments for Bill #{$billNo} have been reversed successfully",
+            'affected_records' => $sales->count()
+        ]);
+        
+    } catch (\Exception $e) {
+        DB::rollBack();
+        Log::error('Failed to delete bill payments: ' . $e->getMessage());
+        
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to reverse payments: ' . $e->getMessage()
+        ], 500);
+    }
+}
 }

@@ -1163,4 +1163,113 @@ private function getCombinedTransactions($bankAccountId = null, $startDate = nul
         
         return $openingBalance + ($totalDebit - $totalCredit);
     }
+    /**
+ * Get cheque payments report (Debit entries for cheque payments)
+ * This shows all cheque payments received (money added to bank)
+ */
+public function getChequePaymentsReport(Request $request)
+{
+    $startDate = $request->get('start_date');
+    $endDate = $request->get('end_date');
+    $bankAccountId = $request->get('bank_account_id');
+    
+    // Get combined transactions from Sales and SalesHistory
+    $transactions = [];
+    
+    // Query from Sales table (current sales)
+    $salesQuery = Sale::whereNotNull('cheq_no')
+        ->where('cheq_no', '!=', '')
+        ->whereNotNull('given_amount')
+        ->where('given_amount', '>', 0);
+    
+    if ($bankAccountId && $bankAccountId !== 'all' && $bankAccountId !== 'null') {
+        $salesQuery->where('bank_account_id', $bankAccountId);
+    }
+    if ($startDate) {
+        $salesQuery->whereDate('Date', '>=', $startDate);
+    }
+    if ($endDate) {
+        $salesQuery->whereDate('Date', '<=', $endDate);
+    }
+    
+    $salesTransactions = $salesQuery->get();
+    foreach ($salesTransactions as $sale) {
+        $transactions[] = [
+            'date' => $sale->Date,
+            'cheq_no' => $sale->cheq_no,
+            'cheq_date' => $sale->cheq_date,
+            'customer_name' => $sale->customer_name ?? $sale->customer_code,
+            'customer_code' => $sale->customer_code,
+            'bill_no' => $sale->bill_no,
+            'amount' => (float)($sale->given_amount ?? 0),
+            'bank_name' => $sale->bank_name,
+            'bank_account_id' => $sale->bank_account_id,
+            'status' => $sale->given_amount_applied === 'Y' ? 'cleared' : 'pending',
+            'source' => 'sales',
+            'type' => 'cheque_payment'
+        ];
+    }
+    
+    // Query from SalesHistory table (archived sales)
+    $historyQuery = SalesHistory::whereNotNull('cheq_no')
+        ->where('cheq_no', '!=', '')
+        ->whereNotNull('given_amount')
+        ->where('given_amount', '>', 0);
+    
+    if ($bankAccountId && $bankAccountId !== 'all' && $bankAccountId !== 'null') {
+        $historyQuery->where('bank_account_id', $bankAccountId);
+    }
+    if ($startDate) {
+        $historyQuery->whereDate('Date', '>=', $startDate);
+    }
+    if ($endDate) {
+        $historyQuery->whereDate('Date', '<=', $endDate);
+    }
+    
+    $historyTransactions = $historyQuery->get();
+    foreach ($historyTransactions as $history) {
+        $transactions[] = [
+            'date' => $history->Date,
+            'cheq_no' => $history->cheq_no,
+            'cheq_date' => $history->cheq_date,
+            'customer_name' => $history->customer_name ?? $history->customer_code,
+            'customer_code' => $history->customer_code,
+            'bill_no' => $history->bill_no,
+            'amount' => (float)($history->given_amount ?? 0),
+            'bank_name' => $history->bank_name,
+            'bank_account_id' => $history->bank_account_id,
+            'status' => $history->given_amount_applied === 'Y' ? 'cleared' : 'pending',
+            'source' => 'sales_history',
+            'type' => 'cheque_payment'
+        ];
+    }
+    
+    // Sort by date
+    usort($transactions, function($a, $b) {
+        return strtotime($a['date']) - strtotime($b['date']);
+    });
+    
+    // Paginate
+    $perPage = (int)$request->get('per_page', 50);
+    $currentPage = (int)$request->get('page', 1);
+    $offset = ($currentPage - 1) * $perPage;
+    $paginatedItems = array_slice($transactions, $offset, $perPage);
+    
+    return response()->json([
+        'success' => true,
+        'data' => [
+            'current_page' => $currentPage,
+            'data' => $paginatedItems,
+            'total' => count($transactions),
+            'per_page' => $perPage,
+            'last_page' => ceil(count($transactions) / $perPage),
+            'summary' => [
+                'total_amount' => collect($transactions)->sum('amount'),
+                'total_count' => count($transactions),
+                'cleared_count' => collect($transactions)->where('status', 'cleared')->count(),
+                'pending_count' => collect($transactions)->where('status', 'pending')->count()
+            ]
+        ]
+    ]);
+}
 }

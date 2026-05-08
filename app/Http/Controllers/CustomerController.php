@@ -11,7 +11,7 @@ class CustomerController extends Controller
 {
     public function apiIndex()
     {
-        $customers = Customer::select('id', 'name', 'short_name', 'credit_limit', 'profile_pic', 'nic_front', 'nic_back','telephone_no')->get();
+        $customers = Customer::select('id', 'name', 'short_name', 'credit_limit', 'profile_pic', 'nic_front', 'nic_back', 'telephone_no', 'Debtor')->get();
         return response()->json($customers);
     }
 
@@ -27,6 +27,7 @@ class CustomerController extends Controller
             'profile_pic'  => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
             'nic_front'    => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
             'nic_back'     => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+            'Debtor'       => 'nullable|in:Y,N',
         ]);
 
         // Handle File Uploads
@@ -44,85 +45,117 @@ class CustomerController extends Controller
             $data['short_name'] = strtoupper($data['short_name']);
         }
 
+        // Set Debtor default if not provided
+        if (!isset($data['Debtor'])) {
+            $data['Debtor'] = 'N';
+        }
+
         $customer = Customer::create($data);
         return response()->json($customer, 201);
     }
 
-  public function apiUpdate(Request $request, Customer $customer)
-{
-    $data = $request->validate([
-        'short_name'   => 'nullable|string',
-        'name'         => 'nullable|string',
-        'ID_NO'        => 'nullable|string',
-        'telephone_no' => 'nullable|string',
-        'address'      => 'nullable|string',
-        'credit_limit' => 'nullable|numeric',
-        // Use 'file' instead of 'image' for better compatibility
-        'profile_pic'  => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
-        'nic_front'    => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
-        'nic_back'     => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
-    ]);
+    public function apiUpdate(Request $request, Customer $customer)
+    {
+        $data = $request->validate([
+            'short_name'   => 'nullable|string',
+            'name'         => 'nullable|string',
+            'ID_NO'        => 'nullable|string',
+            'telephone_no' => 'nullable|string',
+            'address'      => 'nullable|string',
+            'credit_limit' => 'nullable|numeric',
+            'profile_pic'  => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
+            'nic_front'    => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
+            'nic_back'     => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
+            'Debtor'       => 'nullable|in:Y,N',
+        ]);
 
-    $fields = ['profile_pic', 'nic_front', 'nic_back'];
-    foreach ($fields as $field) {
-        if ($request->hasFile($field)) {
-            // Delete old file
-            if ($customer->$field) {
-                Storage::disk('public')->delete($customer->$field);
+        $fields = ['profile_pic', 'nic_front', 'nic_back'];
+        foreach ($fields as $field) {
+            if ($request->hasFile($field)) {
+                if ($customer->$field) {
+                    Storage::disk('public')->delete($customer->$field);
+                }
+                $data[$field] = $request->file($field)->store('customers', 'public');
             }
-            // Store new file
-            $data[$field] = $request->file($field)->store('customers', 'public');
         }
+
+        $customer->update($data);
+        return response()->json($customer);
     }
 
-    $customer->update($data);
-    return response()->json($customer);
-}
-   public function apiDestroy(Customer $customer)
-{
-    // Only keep files that exist
-    $files = array_filter([$customer->profile_pic, $customer->nic_front, $customer->nic_back]);
+    public function apiDestroy(Customer $customer)
+    {
+        $files = array_filter([$customer->profile_pic, $customer->nic_front, $customer->nic_back]);
 
-    // Delete only if there are files
-    if (!empty($files)) {
-        Storage::disk('public')->delete($files);
-    }
-
-    $customer->delete();
-
-    return response()->json(['message' => 'Deleted successfully']);
-}
-   public function checkOrCreate(Request $request)
-{
-    // Check by short_name (Customer Code)
-    $customer = Customer::where('short_name', strtoupper($request->short_name))->first();
-
-    if ($customer) {
-        // If it exists but didn't have a phone, you might want to update it
-        if (!$customer->telephone_no && $request->telephone_no) {
-            $customer->update(['telephone_no' => $request->telephone_no]);
+        if (!empty($files)) {
+            Storage::disk('public')->delete($files);
         }
-        
-        return response()->json(['was_created' => false, 'customer' => $customer]);
+
+        $customer->delete();
+
+        return response()->json(['message' => 'Deleted successfully']);
     }
 
-    // Create if totally new
-    $newCustomer = Customer::create([
-        'short_name' => strtoupper($request->short_name),
-        'name' => strtoupper($request->short_name),
-        'telephone_no' => $request->telephone_no,
-    ]);
+    public function checkOrCreate(Request $request)
+    {
+        $customer = Customer::where('short_name', strtoupper($request->short_name))->first();
 
-    return response()->json(['was_created' => true, 'customer' => $newCustomer]);
-}
-public function checkShortName($short_name)
-{
-    // Check if a customer exists with this short_name
-    $exists = \App\Models\Customer::where('short_name', strtoupper($short_name))->exists();
+        if ($customer) {
+            if (!$customer->telephone_no && $request->telephone_no) {
+                $customer->update(['telephone_no' => $request->telephone_no]);
+            }
+            if ($request->Debtor === 'Y') {
+                $customer->update(['Debtor' => 'Y']);
+            }
+            return response()->json(['was_created' => false, 'customer' => $customer]);
+        }
 
-    return response()->json([
-        'exists' => $exists
-    ]);
-}
+        $newCustomer = Customer::create([
+            'short_name' => strtoupper($request->short_name),
+            'name' => strtoupper($request->short_name),
+            'telephone_no' => $request->telephone_no,
+            'Debtor' => $request->Debtor ?? 'N',
+        ]);
 
+        return response()->json(['was_created' => true, 'customer' => $newCustomer]);
+    }
+
+    public function checkShortName($short_name)
+    {
+        $customer = Customer::where('short_name', strtoupper($short_name))->first();
+
+        return response()->json([
+            'exists' => $customer !== null,
+            'customer' => $customer,
+            'is_debtor' => $customer ? $customer->Debtor === 'Y' : false
+        ]);
+    }
+
+    public function getDebtorStatus($short_name)
+    {
+        $customer = Customer::where('short_name', strtoupper($short_name))->first();
+
+        return response()->json([
+            'exists' => $customer !== null,
+            'is_debtor' => $customer ? $customer->Debtor === 'Y' : false,
+            'customer' => $customer
+        ]);
+    }
+
+    public function updateDebtorStatus(Request $request)
+    {
+        $request->validate([
+            'short_name' => 'required|string',
+            'Debtor' => 'required|in:Y,N'
+        ]);
+
+        $customer = Customer::where('short_name', strtoupper($request->short_name))->first();
+
+        if ($customer) {
+            $customer->update(['Debtor' => $request->Debtor]);
+            return response()->json(['success' => true, 'customer' => $customer]);
+        }
+
+        return response()->json(['success' => false, 'message' => 'Customer not found'], 404);
+    }
 }
