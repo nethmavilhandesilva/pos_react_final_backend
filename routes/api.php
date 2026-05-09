@@ -299,7 +299,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/banks-list', [SupplierLoanController::class, 'getBanks']);
     Route::get('/pending-customer-bills', [SupplierLoanController::class, 'getPendingCustomerBills']);
     Route::get('/pending-farmer-bills', [SupplierLoanController::class, 'getPendingFarmerBills']);
-    
+
     // Supplier Loan Summary Routes (must come AFTER specific routes)
     Route::get('/suppliers/supplierloans-summary', [SupplierLoanController::class, 'getSupplierLoansSummary']);
     Route::get('/supplier-loan/loan-summary', [SupplierLoanController::class, 'getLoanSummary']);
@@ -340,4 +340,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/income-expense-report', [CustomersLoanController::class, 'getIncomeExpenseReport']);
     Route::get('/income-expense-category-summary', [CustomersLoanController::class, 'getCategorySummary']);
     Route::get('/income-expense-export', [CustomersLoanController::class, 'exportReport']);
+    //supplier creditior related routes
+    // routes/api.php
+    Route::get('/suppliers/check-creditor/{code}', [SupplierController::class, 'getSupplierByCode']);
+    Route::post('/suppliers/check-or-create-creditor', [SupplierController::class, 'checkOrCreateCreditor']);
 });

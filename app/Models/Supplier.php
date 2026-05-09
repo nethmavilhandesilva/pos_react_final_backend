@@ -12,7 +12,7 @@ class Supplier extends Model
 
    protected $fillable = [
     'code', 'name', 'address', 'advance_amount', 'dob','telephone_no',
-    'advance_created_date', 'profile_pic', 'nic_front', 'nic_back'
+    'advance_created_date', 'profile_pic', 'nic_front', 'nic_back','Creditor'
 ];
 
 

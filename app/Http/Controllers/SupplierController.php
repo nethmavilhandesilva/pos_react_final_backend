@@ -12,6 +12,7 @@ use App\Models\SupplierBillNumber;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Validator;
 
 class SupplierController extends Controller
 {
@@ -22,44 +23,89 @@ class SupplierController extends Controller
     }
 
   public function store(Request $request)
-{
-    $data = $request->validate([
-        'code'         => 'required|unique:suppliers',
-        'name'         => 'required|string',
-        'dob'          => 'required|date', // Added validation for DOB
-        'address'      => 'required|string',
-         'telephone_no' => 'required|string|max:20',
-        'profile_pic'  => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
-        'nic_front'    => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
-        'nic_back'     => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
-    ]);
+    {
+        $data = $request->validate([
+            'code'         => 'required|unique:suppliers',
+            'name'         => 'required|string',
+            'dob'          => 'required|date',
+            'address'      => 'required|string',
+            'telephone_no' => 'required|string|max:20',
+            'profile_pic'  => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+            'nic_front'    => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+            'nic_back'     => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+        ]);
 
-    // Handle Profile Picture Upload
-    if ($request->hasFile('profile_pic')) {
-        $data['profile_pic'] = $request->file('profile_pic')->store('suppliers/profiles', 'public');
+        if ($request->hasFile('profile_pic')) {
+            $data['profile_pic'] = $request->file('profile_pic')->store('suppliers/profiles', 'public');
+        }
+
+        if ($request->hasFile('nic_front')) {
+            $data['nic_front'] = $request->file('nic_front')->store('suppliers/nic', 'public');
+        }
+
+        if ($request->hasFile('nic_back')) {
+            $data['nic_back'] = $request->file('nic_back')->store('suppliers/nic', 'public');
+        }
+
+        $data['code'] = strtoupper($data['code']);
+        $data['Creditor'] = 'Y';
+        
+        $supplier = Supplier::create($data);
+
+        return response()->json([
+            'message' => 'Supplier added successfully!', 
+            'supplier' => $supplier
+        ], 201);
     }
 
-    // Handle NIC Front Upload
-    if ($request->hasFile('nic_front')) {
-        $data['nic_front'] = $request->file('nic_front')->store('suppliers/nic', 'public');
+    public function checkOrCreateCreditor(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'supplier_code' => 'required|string'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        $supplierCode = strtoupper($request->supplier_code);
+        $supplier = Supplier::where('code', $supplierCode)->first();
+
+        if ($supplier) {
+            // Update existing supplier as creditor
+            $supplier->Creditor = 'Y';
+            $supplier->save();
+            
+            return response()->json([
+                'exists' => true,
+                'supplier' => $supplier,
+                'message' => 'Supplier marked as creditor'
+            ]);
+        } else {
+            return response()->json([
+                'exists' => false,
+                'message' => 'Supplier not found. Please create new supplier.'
+            ]);
+        }
     }
 
-    // Handle NIC Back Upload
-    if ($request->hasFile('nic_back')) {
-        $data['nic_back'] = $request->file('nic_back')->store('suppliers/nic', 'public');
+    public function getSupplierByCode($code)
+    {
+        $supplier = Supplier::where('code', strtoupper($code))->first();
+        
+        if ($supplier) {
+            return response()->json([
+                'success' => true,
+                'supplier' => $supplier
+            ]);
+        }
+        
+        return response()->json([
+            'success' => false,
+            'message' => 'Supplier not found'
+        ], 404);
     }
-
-    // Ensure code is uppercase
-    $data['code'] = strtoupper($data['code']);
-    
-    // This will now include 'dob' in the creation process
-    $supplier = Supplier::create($data);
-
-    return response()->json([
-        'message' => 'Supplier added successfully!', 
-        'supplier' => $supplier
-    ], 201);
-}    public function show(Supplier $supplier)
+       public function show(Supplier $supplier)
     {
         return response()->json($supplier);
     }
