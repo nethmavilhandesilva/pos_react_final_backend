@@ -981,7 +981,6 @@ public function deleteLoanRecord(Request $request): JsonResponse
             if ($sales->isEmpty()) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'No unprinted sales found for this supplier'
                 ], 404);
             }
 
@@ -990,8 +989,8 @@ public function deleteLoanRecord(Request $request): JsonResponse
         } catch (\Exception $e) {
             Log::error('Error fetching unprinted details: ' . $e->getMessage());
             return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch unprinted details'
+                'success' => false
+                
             ], 500);
         }
     }
@@ -1066,11 +1065,7 @@ public function deleteLoanRecord(Request $request): JsonResponse
                 }
             }
 
-            Log::info('Supplier Loans Summary', [
-                'total_printed_bills' => count($allPrintedBills),
-                'pending_count' => count($pendingBills),
-                'completed_count' => count($completedBills)
-            ]);
+          
 
             // IMPORTANT: 
             // 'printed' = FULLY SETTLED (complete)

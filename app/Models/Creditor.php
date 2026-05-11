@@ -19,7 +19,8 @@ class Creditor extends Model
         'remaining_amount',
         'status',
         'settled_way',
-        'notes'
+        'notes',
+        'Creditor_no'
     ];
 
     protected $casts = [
@@ -39,6 +40,7 @@ class Creditor extends Model
     const SETTLED_WAY_CHEQUE = 'cheque';
     const SETTLED_WAY_BANK_TRANSFER = 'bank_transfer';
     const SETTLED_WAY_ADJUSTMENT = 'adjustment';
+    const SETTLED_WAY_REGISTRATION = 'registration';
 
     public static function getStatuses()
     {
@@ -56,7 +58,20 @@ class Creditor extends Model
             self::SETTLED_WAY_CASH => 'Cash',
             self::SETTLED_WAY_CHEQUE => 'Cheque',
             self::SETTLED_WAY_BANK_TRANSFER => 'Bank Transfer',
-            self::SETTLED_WAY_ADJUSTMENT => 'Adjustment'
+            self::SETTLED_WAY_ADJUSTMENT => 'Adjustment',
+            self::SETTLED_WAY_REGISTRATION => 'Registration'
         ];
+    }
+    
+    // Relationship with Supplier
+    public function supplier()
+    {
+        return $this->belongsTo(Supplier::class, 'supplier_code', 'code');
+    }
+    
+    // Accessor to get formatted creditor number
+    public function getFormattedCreditorNoAttribute()
+    {
+        return $this->Creditor_no ?? 'Not Assigned';
     }
 }

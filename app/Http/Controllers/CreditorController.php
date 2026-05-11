@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Creditor;
+use App\Models\Supplier;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -77,64 +78,111 @@ class CreditorController extends Controller
     }
 
     // Update payment for creditor (when supplier gets paid via cash/cheque/bank_transfer)
-    public function updateCreditorPayment(Request $request)
-    {
-        $request->validate([
-            'bill_no' => 'required|string',
-            'payment_amount' => 'required|numeric|min:0',
-            'payment_method' => 'required|string|in:cash,cheque,bank_transfer,adjustment'
+   public function updateCreditorPayment(Request $request)
+{
+    $request->validate([
+        'bill_no' => 'required|string',
+        'payment_amount' => 'required|numeric|min:0',
+        'payment_method' => 'required|string|in:cash,cheque,bank_transfer,adjustment'
+    ]);
+
+    try {
+
+        DB::beginTransaction();
+
+        \Log::info('========== START updateCreditorPayment ==========', [
+            'request_data' => $request->all()
         ]);
 
-        try {
-            DB::beginTransaction();
+        // ✅ Get existing creditor record by bill_no
+        $creditor = Creditor::where('bill_no', $request->bill_no)->first();
 
-            $creditor = Creditor::where('bill_no', $request->bill_no)->first();
-            
-            if (!$creditor) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Creditor record not found for this bill'
-                ], 404);
-            }
+        if (!$creditor) {
 
-            // Update paid amount and remaining amount
-            $creditor->paid_amount += $request->payment_amount;
-            $creditor->remaining_amount -= $request->payment_amount;
-            $creditor->settled_way = $request->payment_method;
-            
-            // Update status
-            if ($creditor->remaining_amount <= 0) {
-                $creditor->status = 'paid';
-                $creditor->remaining_amount = 0;
-            } elseif ($creditor->paid_amount > 0) {
-                $creditor->status = 'partial';
-            }
-            
-            $creditor->save();
-
-            \Log::info('Creditor payment updated', [
-                'bill_no' => $request->bill_no,
-                'payment_amount' => $request->payment_amount,
-                'payment_method' => $request->payment_method,
-                'remaining_amount' => $creditor->remaining_amount,
-                'status' => $creditor->status
+            \Log::warning('No creditor record found for bill_no', [
+                'bill_no' => $request->bill_no
             ]);
 
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Creditor payment updated successfully',
-                'data' => $creditor
-            ]);
-        } catch (\Exception $e) {
-            DB::rollBack();
             return response()->json([
                 'success' => false,
-                'message' => $e->getMessage()
-            ], 500);
+                'message' => 'Creditor record not found for this bill'
+            ], 404);
         }
+
+        \Log::info('Existing creditor record found', [
+            'creditor_id' => $creditor->id,
+            'bill_no' => $creditor->bill_no,
+            'old_paid_amount' => $creditor->paid_amount,
+            'old_remaining_amount' => $creditor->remaining_amount,
+            'old_status' => $creditor->status
+        ]);
+
+        // ✅ Update existing record ONLY
+        $creditor->paid_amount =
+            ($creditor->paid_amount ?? 0) + $request->payment_amount;
+
+        $creditor->remaining_amount =
+            ($creditor->remaining_amount ?? 0) - $request->payment_amount;
+
+        $creditor->settled_way = $request->payment_method;
+
+        // ✅ Update status
+        if ($creditor->remaining_amount <= 0) {
+
+            $creditor->status = 'paid';
+            $creditor->remaining_amount = 0;
+
+        } elseif ($creditor->paid_amount > 0) {
+
+            $creditor->status = 'partial';
+        }
+
+        \Log::info('Saving updated creditor record', [
+            'new_paid_amount' => $creditor->paid_amount,
+            'new_remaining_amount' => $creditor->remaining_amount,
+            'new_status' => $creditor->status,
+            'payment_method' => $creditor->settled_way
+        ]);
+
+        $creditor->save();
+
+        \Log::info('Creditor payment updated successfully', [
+            'creditor_id' => $creditor->id,
+            'bill_no' => $creditor->bill_no,
+            'payment_amount' => $request->payment_amount,
+            'payment_method' => $request->payment_method,
+            'remaining_amount' => $creditor->remaining_amount,
+            'status' => $creditor->status
+        ]);
+
+        DB::commit();
+
+        \Log::info('Database transaction committed');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Creditor payment updated successfully',
+            'data' => $creditor
+        ]);
+
+    } catch (\Exception $e) {
+
+        DB::rollBack();
+
+        \Log::error('========== updateCreditorPayment FAILED ==========', [
+            'message' => $e->getMessage(),
+            'line' => $e->getLine(),
+            'file' => $e->getFile(),
+            'trace' => $e->getTraceAsString(),
+            'request_data' => $request->all()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => $e->getMessage()
+        ], 500);
     }
+}
 
     // Get creditor by bill number and supplier code
     public function getCreditor($billNo, $supplierCode = null)
@@ -216,4 +264,6 @@ class CreditorController extends Controller
             ], 500);
         }
     }
+    // Add this method to create creditor with customer registration
+
 }

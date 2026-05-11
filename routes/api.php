@@ -113,7 +113,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/suppliers/delete-loan-record', [SupplierLoanController::class, 'deleteLoanRecord']);
     Route::get('/suppliers/bill/{billNo}/details', [SupplierLoanController::class, 'getSupplierBillDetails']);
     Route::get('/suppliers/unprinted-details/{supplierCode}', [SupplierLoanController::class, 'getUnprintedDetails']);
-    Route::get('/suppliers/with-bills', [SupplierController::class, 'getSuppliersWithBills']); // ✅ MOVED HERE - BEFORE apiResource
+    Route::get('/suppliers/with-bills', [SupplierController::class, 'getSuppliersWithBills']);
+    
+    // ✅ CRITICAL CUSTOM ROUTES - MUST BE BEFORE apiResource
+    Route::put('/suppliers/update-creditor-status', [SupplierController::class, 'updateCreditorStatus']);
+    Route::get('/suppliers/check-supplier/{code}', [SupplierController::class, 'checkSupplierExists']);
+    Route::get('/suppliers/creditor-status/{code}', [SupplierController::class, 'getCreditorStatus']);
 
     // Default REST API (must come AFTER specific routes)
     Route::apiResource('suppliers', SupplierController::class);
@@ -350,6 +355,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // ==================== SUPPLIER DETAILED REPORT ====================
     Route::get('/supplier-detailed-report/{supplierCode}', [SupplierController::class, 'getDetailedReport']);
+    
     // Debtor/Creditor Report Routes
     Route::prefix('debtor-creditor')->group(function () {
         Route::get('/debtors', [SupplierController::class, 'getDebtorReport']);
@@ -358,20 +364,23 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/debtor/{code}', [SupplierController::class, 'getDebtorDetails']);
         Route::get('/creditor/{code}', [SupplierController::class, 'getCreditorDetails']);
     });
+    
+    // Debtor Routes
     Route::post('/debtors/create-with-customer', [DebtorController::class, 'createDebtorWithCustomer']);
     Route::prefix('debtors')->group(function () {
-    Route::post('/create', [DebtorController::class, 'createDebt']);
-    Route::put('/update-payment', [DebtorController::class, 'updateDebtorPayment']);  // Make sure this is PUT
-    Route::get('/{billNo}', [DebtorController::class, 'getDebtor']);
-    Route::get('/customer/{customerCode}', [DebtorController::class, 'getCustomerDebtors']);
-    Route::get('/pending/all', [DebtorController::class, 'getPendingDebtors']);
+        Route::post('/create', [DebtorController::class, 'createDebt']);
+        Route::put('/update-payment', [DebtorController::class, 'updateDebtorPayment']);
+        Route::get('/{billNo}', [DebtorController::class, 'getDebtor']);
+        Route::get('/customer/{customerCode}', [DebtorController::class, 'getCustomerDebtors']);
+        Route::get('/pending/all', [DebtorController::class, 'getPendingDebtors']);
+        Route::get('/by-number/{debtorNo}', [DebtorController::class, 'getDebtorByNumber']);
+    });
+    
+    // Creditor routes (similar to Debtor but for suppliers)
+    Route::post('/creditors/create', [CreditorController::class, 'createCreditor']);
+    Route::put('/creditors/update-payment', [CreditorController::class, 'updateCreditorPayment']);
+    Route::get('/creditors/{billNo}', [CreditorController::class, 'getCreditor']);
+    Route::get('/creditors/supplier/{supplierCode}', [CreditorController::class, 'getSupplierCreditors']);
+    Route::get('/creditors/pending/all', [CreditorController::class, 'getPendingCreditors']);
+    Route::post('/creditors/create-with-supplier', [CreditorController::class, 'createCreditorWithSupplier']);
 });
-// Creditor routes (similar to Debtor but for suppliers)
-Route::post('/creditors/create', [CreditorController::class, 'createCreditor']);
-Route::put('/creditors/update-payment', [CreditorController::class, 'updateCreditorPayment']);
-Route::get('/creditors/{billNo}', [CreditorController::class, 'getCreditor']);
-Route::get('/creditors/supplier/{supplierCode}', [CreditorController::class, 'getSupplierCreditors']);
-Route::get('/creditors/pending/all', [CreditorController::class, 'getPendingCreditors']);
-Route::get('/debtors/by-number/{debtorNo}', [DebtorController::class, 'getDebtorByNumber']);
-});
-
