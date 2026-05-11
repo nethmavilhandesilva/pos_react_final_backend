@@ -3,79 +3,184 @@
 namespace App\Http\Controllers;
 
 use App\Models\Debtor;
+use App\Models\Customer;
 use App\Models\Sale;
+use App\Helpers\DebtorNumberHelper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class DebtorController extends Controller
 {
     // Create or update debtor record (for credit payments)
-    public function createDebtor(Request $request)
-    {
-        $request->validate([
-            'bill_no' => 'required|string',
-            'customer_code' => 'required|string',
-            'credit_amount' => 'required|numeric|min:0'
+  // Add this method to DebtorController.php
+public function createDebtorWithCustomer(Request $request)
+{
+    $request->validate([
+        'bill_no' => 'nullable|string',
+        'customer_code' => 'required|string',
+        'credit_amount' => 'numeric|min:0',
+        'debtor_no' => 'required|string'
+    ]);
+
+    try {
+        DB::beginTransaction();
+
+        // ✅ Log frontend received data
+        \Log::info('Frontend request received for debtor creation', [
+            'bill_no' => $request->bill_no,
+            'customer_code' => $request->customer_code,
+            'credit_amount' => $request->credit_amount,
+            'debtor_no' => $request->debtor_no,
+            'full_request' => $request->all()
         ]);
 
-        try {
-            DB::beginTransaction();
+        // Check if debtor record already exists for this bill and customer
+        $debtor = Debtor::where('bill_no', $request->bill_no)
+            ->where('customer_code', $request->customer_code)
+            ->first();
 
-            \Log::info('Creating debtor record', [
+        if (!$debtor) {
+            $debtor = Debtor::create([
                 'bill_no' => $request->bill_no,
                 'customer_code' => $request->customer_code,
-                'credit_amount' => $request->credit_amount
+                'credit_amount' => $request->credit_amount ?? 0,
+                'paid_amount' => 0,
+                'remaining_amount' => $request->credit_amount ?? 0,
+                'status' => 'pending',
+                'settled_way' => 'registration',
+                'Debtor_no' => $request->debtor_no
             ]);
 
-            $debtor = Debtor::where('bill_no', $request->bill_no)->first();
-
-            if ($debtor) {
-                // Update existing debtor - ADD to existing credit
-                $newCreditAmount = $debtor->credit_amount + $request->credit_amount;
-                $newRemainingAmount = $debtor->remaining_amount + $request->credit_amount;
-                
-                $debtor->credit_amount = $newCreditAmount;
-                $debtor->remaining_amount = $newRemainingAmount;
-                $debtor->status = $newRemainingAmount > 0 ? 'pending' : 'paid';
-                $debtor->settled_way = 'credit'; // Mark as credit settlement
-                $debtor->save();
-                
-                $result = $debtor;
-            } else {
-                // Create new debtor
-                $result = Debtor::create([
-                    'bill_no' => $request->bill_no,
-                    'customer_code' => $request->customer_code,
-                    'credit_amount' => $request->credit_amount,
-                    'paid_amount' => 0,
-                    'remaining_amount' => $request->credit_amount,
-                    'status' => 'pending',
-                    'settled_way' => 'credit'
-                ]);
-            }
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Debtor record created successfully',
-                'data' => $result
+            \Log::info('Debtor record created with customer registration', [
+                'bill_no' => $request->bill_no,
+                'customer_code' => $request->customer_code,
+                'debtor_no' => $request->debtor_no
             ]);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            \Log::error('Error creating debtor record', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+        } else {
+
+            // ✅ Log if already exists
+            \Log::warning('Debtor already exists', [
+                'bill_no' => $request->bill_no,
+                'customer_code' => $request->customer_code
             ]);
-            
-            return response()->json([
-                'success' => false,
-                'message' => $e->getMessage()
-            ], 500);
         }
-    }
 
-    // NEW: Update payment for debtor (when customer pays using cash/cheque/bank_transfer)
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Debtor record created successfully',
+            'data' => $debtor
+        ]);
+
+    } catch (\Exception $e) {
+
+        DB::rollBack();
+
+        \Log::error('Error creating debtor with customer', [
+            'message' => $e->getMessage(),
+            'bill_no' => $request->bill_no ?? null,
+            'customer_code' => $request->customer_code ?? null,
+            'trace' => $e->getTraceAsString()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => $e->getMessage()
+        ], 500);
+    }
+}
+public function createDebt(Request $request)
+{
+    $request->validate([
+        'bill_no' => 'nullable|string',
+        'customer_code' => 'required|string',
+        'credit_amount' => 'numeric|min:0',
+        'debtor_no' => 'nullable|string'
+    ]);
+
+    try {
+
+        DB::beginTransaction();
+
+        // ✅ Log frontend received data
+        \Log::info('Frontend request received for debtor creation', [
+            'bill_no' => $request->bill_no,
+            'customer_code' => $request->customer_code,
+            'credit_amount' => $request->credit_amount,
+            'debtor_no' => $request->debtor_no,
+            'full_request' => $request->all()
+        ]);
+
+        // ✅ Check record only by bill_no
+        $debtor = Debtor::where('bill_no', $request->bill_no)->first();
+
+        if ($debtor) {
+
+            // ✅ Update existing record
+            $debtor->update([
+                'customer_code' => $request->customer_code,
+                'credit_amount' => $request->credit_amount ?? 0,
+                'remaining_amount' => $request->credit_amount ?? 0,
+                'Debtor_no' => $request->debtor_no
+            ]);
+
+            \Log::info('Existing debtor updated', [
+                'bill_no' => $request->bill_no,
+                'customer_code' => $request->customer_code,
+                'debtor_no' => $request->debtor_no
+            ]);
+
+        } else {
+
+            // ✅ Create new record
+            $debtor = Debtor::create([
+                'bill_no' => $request->bill_no,
+                'customer_code' => $request->customer_code,
+                'credit_amount' => $request->credit_amount ?? 0,
+                'paid_amount' => 0,
+                'remaining_amount' => $request->credit_amount ?? 0,
+                'status' => 'pending',
+                'settled_way' => 'registration',
+                'Debtor_no' => $request->debtor_no
+            ]);
+
+            \Log::info('New debtor record created', [
+                'bill_no' => $request->bill_no,
+                'customer_code' => $request->customer_code,
+                'debtor_no' => $request->debtor_no
+            ]);
+        }
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => $debtor->wasRecentlyCreated
+                ? 'Debtor record created successfully'
+                : 'Debtor record updated successfully',
+            'data' => $debtor
+        ]);
+
+    } catch (\Exception $e) {
+
+        DB::rollBack();
+
+        \Log::error('Error creating/updating debtor', [
+            'message' => $e->getMessage(),
+            'bill_no' => $request->bill_no ?? null,
+            'customer_code' => $request->customer_code ?? null,
+            'trace' => $e->getTraceAsString()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => $e->getMessage()
+        ], 500);
+    }
+}
+
+    // Update payment for debtor (when customer pays using cash/cheque/bank_transfer)
     public function updateDebtorPayment(Request $request)
     {
         $request->validate([
@@ -202,4 +307,21 @@ class DebtorController extends Controller
         }
     }
     
+    // Get debtor by debtor number
+    public function getDebtorByNumber($debtorNo)
+    {
+        try {
+            $debtors = Debtor::where('Debtor_no', $debtorNo)->get();
+            
+            return response()->json([
+                'success' => true,
+                'data' => $debtors
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
 }

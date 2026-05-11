@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\CreditorController;
 use App\Http\Controllers\FarmerLoanController;
 use App\Http\Controllers\IC_UtilityTypeController;
 use App\Http\Controllers\ReportController2;
@@ -357,11 +358,20 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/debtor/{code}', [SupplierController::class, 'getDebtorDetails']);
         Route::get('/creditor/{code}', [SupplierController::class, 'getCreditorDetails']);
     });
+    Route::post('/debtors/create-with-customer', [DebtorController::class, 'createDebtorWithCustomer']);
     Route::prefix('debtors')->group(function () {
-    Route::post('/create', [DebtorController::class, 'createDebtor']);
+    Route::post('/create', [DebtorController::class, 'createDebt']);
     Route::put('/update-payment', [DebtorController::class, 'updateDebtorPayment']);  // Make sure this is PUT
     Route::get('/{billNo}', [DebtorController::class, 'getDebtor']);
     Route::get('/customer/{customerCode}', [DebtorController::class, 'getCustomerDebtors']);
     Route::get('/pending/all', [DebtorController::class, 'getPendingDebtors']);
 });
+// Creditor routes (similar to Debtor but for suppliers)
+Route::post('/creditors/create', [CreditorController::class, 'createCreditor']);
+Route::put('/creditors/update-payment', [CreditorController::class, 'updateCreditorPayment']);
+Route::get('/creditors/{billNo}', [CreditorController::class, 'getCreditor']);
+Route::get('/creditors/supplier/{supplierCode}', [CreditorController::class, 'getSupplierCreditors']);
+Route::get('/creditors/pending/all', [CreditorController::class, 'getPendingCreditors']);
+Route::get('/debtors/by-number/{debtorNo}', [DebtorController::class, 'getDebtorByNumber']);
 });
+

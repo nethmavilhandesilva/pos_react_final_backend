@@ -2,10 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Helpers\DebtorNumberHelper;
 use App\Models\Customer;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
+use App\Models\Debtor;
+use Illuminate\Support\Facades\DB;
 
 class CustomerController extends Controller
 {
@@ -15,7 +18,7 @@ class CustomerController extends Controller
         return response()->json($customers);
     }
 
-    public function apiStore(Request $request)
+  public function apiStore(Request $request)
     {
         $data = $request->validate([
             'short_name'   => 'nullable|string',
@@ -50,10 +53,39 @@ class CustomerController extends Controller
             $data['Debtor'] = 'N';
         }
 
-        $customer = Customer::create($data);
-        return response()->json($customer, 201);
-    }
+        DB::beginTransaction();
+        
+        try {
+            // Generate Debtor number if Debtor is Y
+            if ($data['Debtor'] === 'Y') {
+                $data['Debtor_no'] = DebtorNumberHelper::generateDebtorNumber();
+            }
 
+            $customer = Customer::create($data);
+            
+            // If customer is marked as Debtor, create a debtor record
+            if ($data['Debtor'] === 'Y' && $data['Debtor_no']) {
+                Debtor::create([
+                    'bill_no' => null, // No bill number for initial debtor registration
+                    'customer_code' => $customer->short_name,
+                    'credit_amount' => 0,
+                    'paid_amount' => 0,
+                    'remaining_amount' => 0,
+                    'status' => 'pending',
+                    'settled_way' => 'registration',
+                    'Debtor_no' => $data['Debtor_no']
+                ]);
+            }
+            
+            DB::commit();
+            
+            return response()->json($customer, 201);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            \Log::error('Error creating customer with debtor record: ' . $e->getMessage());
+            return response()->json(['error' => 'Failed to create customer'], 500);
+        }
+    }
     public function apiUpdate(Request $request, Customer $customer)
     {
         $data = $request->validate([
@@ -142,20 +174,89 @@ class CustomerController extends Controller
         ]);
     }
 
-    public function updateDebtorStatus(Request $request)
-    {
-        $request->validate([
-            'short_name' => 'required|string',
-            'Debtor' => 'required|in:Y,N'
-        ]);
+  public function updateDebtorStatus(Request $request)
+{
+    $request->validate([
+        'short_name' => 'required|string',
+        'Debtor' => 'required|in:Y,N',
+        'bill_no' => 'nullable|string'  // Add bill_no validation
+    ]);
 
+    DB::beginTransaction();
+    
+    try {
         $customer = Customer::where('short_name', strtoupper($request->short_name))->first();
 
-        if ($customer) {
-            $customer->update(['Debtor' => $request->Debtor]);
-            return response()->json(['success' => true, 'customer' => $customer]);
+        if (!$customer) {
+            return response()->json(['success' => false, 'message' => 'Customer not found'], 404);
         }
 
-        return response()->json(['success' => false, 'message' => 'Customer not found'], 404);
+        $updateData = ['Debtor' => $request->Debtor];
+        $debtorNumber = null;
+        
+        // If setting as Debtor
+        if ($request->Debtor === 'Y') {
+            // Generate new debtor number if not exists
+            if (empty($customer->Debtor_no)) {
+                $debtorNumber = DebtorNumberHelper::generateDebtorNumber();
+                $updateData['Debtor_no'] = $debtorNumber;
+            } else {
+                $debtorNumber = $customer->Debtor_no;
+            }
+            
+            // ✅ Check if debtor record already exists for this customer AND specific bill
+            $existingDebtor = Debtor::where('customer_code', $customer->short_name)
+                ->where('bill_no', $request->bill_no)  // Match specific bill
+                ->first();
+            
+            // Create debtor record with bill number if it doesn't exist
+            if (!$existingDebtor && $request->bill_no) {
+                Debtor::create([
+                    'bill_no' => $request->bill_no,  // ✅ Use the bill_no from request
+                    'customer_code' => $customer->short_name,
+                    'credit_amount' => 0,
+                    'paid_amount' => 0,
+                    'remaining_amount' => 0,
+                    'status' => 'pending',
+                    'settled_way' => 'credit',  // Use 'credit' instead of 'registration'
+                    'Debtor_no' => $debtorNumber
+                ]);
+                \Log::info('Debtor record created from status update', [
+                    'bill_no' => $request->bill_no,
+                    'customer_code' => $customer->short_name,
+                    'debtor_no' => $debtorNumber
+                ]);
+            } elseif (!$existingDebtor && !$request->bill_no) {
+                // Create registration record without bill number
+                Debtor::create([
+                    'bill_no' => null,
+                    'customer_code' => $customer->short_name,
+                    'credit_amount' => 0,
+                    'paid_amount' => 0,
+                    'remaining_amount' => 0,
+                    'status' => 'pending',
+                    'settled_way' => 'credit',
+                    'Debtor_no' => $debtorNumber
+                ]);
+            }
+        }
+        
+        $customer->update($updateData);
+        
+        DB::commit();
+        
+        return response()->json([
+            'success' => true, 
+            'customer' => $customer,
+            'debtor_no' => $customer->Debtor_no
+        ]);
+    } catch (\Exception $e) {
+        DB::rollBack();
+        \Log::error('Error updating debtor status: ' . $e->getMessage());
+        return response()->json([
+            'success' => false, 
+            'message' => 'Failed to update debtor status: ' . $e->getMessage()
+        ], 500);
     }
+}
 }

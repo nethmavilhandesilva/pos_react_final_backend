@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Creditor;
 use App\Models\Sale;
 use App\Models\SupplierLoan;
 use DB;
@@ -515,39 +516,69 @@ class SupplierLoanController extends Controller
     /**
      * Delete loan record
      */
-    public function deleteLoanRecord(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'code' => 'required|string',
-            'bill_no' => 'nullable|string',
-        ]);
+public function deleteLoanRecord(Request $request): JsonResponse
+{
+    $validated = $request->validate([
+        'code' => 'required|string',
+        'bill_no' => 'nullable|string',
+    ]);
 
-        DB::beginTransaction();
+    DB::beginTransaction();
 
-        try {
-            SupplierLoan::where('code', $validated['code'])
-                ->where('bill_no', $validated['bill_no'])
-                ->delete();
+    try {
 
-            Sale::where('supplier_code', $validated['code'])
-                ->where('supplier_bill_no', $validated['bill_no'])
-                ->update(['loan_taken' => null]);
+        // Find supplier loan record
+        $loanRecord = SupplierLoan::where('code', $validated['code'])
+            ->where('bill_no', $validated['bill_no'])
+            ->first();
 
-            DB::commit();
+        if (!$loanRecord) {
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Loan record deleted successfully.'
-            ], 200);
-        } catch (\Exception $e) {
             DB::rollback();
+
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to delete record: ' . $e->getMessage()
-            ], 500);
+                'message' => 'Loan record not found.'
+            ], 404);
         }
-    }
 
+        // Find matching creditor record
+        $creditor = Creditor::where('bill_no', trim($loanRecord->bill_no))
+            ->where('supplier_code', trim($validated['code']))
+            ->first();
+
+        // Permanently delete creditor record if exists
+        if ($creditor) {
+            $creditor->forceDelete();
+        }
+
+        // Permanently delete supplier loan record
+        $loanRecord->forceDelete();
+
+        // Update sales table
+        Sale::where('supplier_code', $validated['code'])
+            ->where('supplier_bill_no', $validated['bill_no'])
+            ->update([
+                'loan_taken' => null
+            ]);
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Loan and creditor records permanently deleted successfully.'
+        ], 200);
+
+    } catch (\Exception $e) {
+
+        DB::rollback();
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to delete record: ' . $e->getMessage()
+        ], 500);
+    }
+}
     /**
      * Get all supplier codes
      */

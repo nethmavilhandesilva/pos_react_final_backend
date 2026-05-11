@@ -13,7 +13,8 @@ class Debtor extends Model
         'paid_amount',
         'remaining_amount',
         'status',
-        'settled_way'
+        'settled_way',
+        'Debtor_no'
     ];
 
     protected $casts = [
@@ -26,5 +27,17 @@ class Debtor extends Model
     public function sale()
     {
         return $this->belongsTo(Sale::class, 'bill_no', 'bill_no');
+    }
+    
+    // Relationship with Customer
+    public function customer()
+    {
+        return $this->belongsTo(Customer::class, 'customer_code', 'short_name');
+    }
+    
+    // Accessor to get formatted debtor number
+    public function getFormattedDebtorNoAttribute()
+    {
+        return $this->Debtor_no ?? 'Not Assigned';
     }
 }
