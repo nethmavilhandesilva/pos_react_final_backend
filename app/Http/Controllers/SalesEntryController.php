@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Mail\DayEndWeightReportMail;
 use App\Models\Bank;
+use App\Models\Debtor;
 use App\Models\GrnEntry;
 use App\Models\Supplier;
 use App\Models\Sale;
@@ -400,9 +401,10 @@ class SalesEntryController extends Controller
 
             $billNoToUse = $existingBillNo ?: $this->generateNewBillNumber();
 
+            $salesRecords = null;
 
             // 2. ✅ UPDATE SALES RECORDS IN TRANSACTION
-            DB::transaction(function () use ($salesIds, $billNoToUse) {
+            DB::transaction(function () use ($salesIds, $billNoToUse, &$salesRecords) {
 
                 $salesRecords = Sale::whereIn('id', $salesIds)->get();
 
@@ -419,7 +421,6 @@ class SalesEntryController extends Controller
                     $sale->save();
                 }
             });
-
 
             // 3. ✅ GENERATE ITEM SUMMARY + BILL FINAL TOTAL
             $itemsForSummary = Sale::whereIn('id', $salesIds)->get();
@@ -440,8 +441,27 @@ class SalesEntryController extends Controller
                 return "{$itemName}({$itemCode})={$totalWeight}/{$totalPacks}";
             })->implode("\n");
 
+            // ✅ Prepare sales data from actual database records
+            $formattedSalesData = [];
+            foreach ($salesRecords as $sale) {
+                $formattedSalesData[] = [
+                    'id' => $sale->id,
+                    'item_name' => $sale->item_name,
+                    'item_code' => $sale->item_code,
+                    'weight' => (float) $sale->weight,
+                    'price_per_kg' => (float) $sale->price_per_kg,
+                    'packs' => (int) $sale->packs,
+                    'supplier_code' => $sale->supplier_code,
+                    'customer_code' => $sale->customer_code,
+                    'total' => (float) $sale->total,
+                    'SupplierTotal' => (float) $sale->SupplierTotal,
+                    'SupplierPricePerKg' => (float) $sale->SupplierPricePerKg,
+                    'CustomerPackCost' => (float) ($sale->CustomerPackCost ?? 0),
+                    'commission_amount' => (float) ($sale->commission_amount ?? 0),
+                ];
+            }
 
-            // 4. ✅ CREATE PUBLIC BILL LINK
+            // 4. ✅ CREATE PUBLIC BILL LINK WITH FORMATTED SALES DATA
             $token = Str::random(40);
             $baseUrl = env('APP_FRONTEND_URL', 'https://goviraju.lk/sms_new_frontend_50500/');
             $publicUrl = rtrim($baseUrl, '/') . "/view-bill/" . $token;
@@ -449,20 +469,19 @@ class SalesEntryController extends Controller
             DB::table('bill_links')->insert([
                 'token' => $token,
                 'bill_no' => $billNoToUse,
-                'sales_data' => json_encode($request->sales_data ?? []),
+                'sales_data' => json_encode($formattedSalesData), // ✅ Using formatted data from DB instead of request
                 'loan_amount' => $request->loan_amount ?? 0,
                 'customer_name' => $request->customer_name,
                 'created_at' => now(),
                 'updated_at' => now()
             ]);
 
-
             // 5. ✅ RESOLVE TELEPHONE NUMBER
             $to = $request->telephone_no;
 
             $customerCode = $request->customer_code
                 ?? $request->customer_name
-                ?? ($request->sales_data[0]['customer_code'] ?? null);
+                ?? ($salesRecords->first()->customer_code ?? null);
 
             if (empty($to) && !empty($customerCode)) {
 
@@ -472,7 +491,6 @@ class SalesEntryController extends Controller
                     $to = $customer->telephone_no;
                 }
             }
-
 
             // 6. ✅ SEND SMS VIA TEXT.LK
             if (!empty($to)) {
@@ -519,7 +537,6 @@ class SalesEntryController extends Controller
                 }
             }
 
-
             return response()->json([
                 'status' => 'success',
                 'message' => 'Sales processed and SMS sent via Text.lk!',
@@ -537,7 +554,6 @@ class SalesEntryController extends Controller
             ], 500);
         }
     }
-
     private function generateNewBillNumber()
     {
         return \DB::transaction(function () {
@@ -746,37 +762,6 @@ class SalesEntryController extends Controller
             }
 
             DB::commit();
-
-            // --- 9. SEND DETAILED UPDATE NOTIFICATION SMS ---
-            try {
-                $adminPhone = '94702758908';
-                $now = now()->format('Y-m-d H:i');
-
-                // Generate detailed Old vs New rows
-                $oldRow = "OLD: {$originalData['item_code']}, Wt:{$originalData['weight']}, Pk:{$originalData['packs']}, Pr:{$originalData['price_per_kg']}, Tot:{$originalData['total']}";
-                $newRow = "NEW: {$sale->item_code}, Wt:{$sale->weight}, Pk:{$sale->packs}, Pr:{$sale->price_per_kg}, Tot:{$sale->total}";
-
-                $messageBody = "⚠️ SALE UPDATED\n" .
-                    "Time: {$now}\n" .
-                    "Cust: {$sale->customer_code}\n" .
-                    "{$oldRow}\n" .
-                    "{$newRow}\n" .
-                    "Bill: " . ($sale->bill_no ?? 'N/A');
-
-                // Using your existing library
-                $textLKSMS = new \TextLK\SMS\TextLKSMSMessage();
-                $textLKSMS->recipient($adminPhone)
-                    ->message($messageBody)
-                    ->senderId(env('TEXTLK_SENDER_ID', 'TextLKDemo'))
-                    ->apiKey(env('TEXTLK_API_KEY'))
-                    ->send();
-
-                Log::info("Detailed update SMS sent for Sale ID: " . $sale->id);
-
-            } catch (\Exception $smsEx) {
-                Log::error("Update SMS Failed: " . $smsEx->getMessage());
-            }
-
             return response()->json(['success' => true, 'sales' => $affectedSales->toArray()]);
 
         } catch (\Exception $e) {
@@ -815,32 +800,6 @@ class SalesEntryController extends Controller
                 Salesadjustment::create($adjustmentData + ['type' => 'original']);
                 Salesadjustment::create($adjustmentData + ['type' => 'deleted']);
 
-                // --- B. Send Deleted Notification SMS ---
-                try {
-                    $adminPhone = '94702758908';
-                    $now = now()->format('Y-m-d H:i');
-
-                    $messageBody = "❌ PRINTED SALE DELETED\n" .
-                        "Time: {$now}\n" .
-                        "Bill: " . ($sale->bill_no ?? 'N/A') . "\n" .
-                        "Cust: {$sale->customer_code}\n" .
-                        "Item: {$sale->item_code}\n" .
-                        "Wt: {$sale->weight}, Pk: {$sale->packs}\n" .
-                        "Price: {$sale->price_per_kg}, Tot: {$sale->total}";
-
-                    $textLKSMS = new \TextLK\SMS\TextLKSMSMessage();
-                    $textLKSMS->recipient($adminPhone)
-                        ->message($messageBody)
-                        ->senderId(env('TEXTLK_SENDER_ID', 'TextLKDemo'))
-                        ->apiKey(env('TEXTLK_API_KEY'))
-                        ->send();
-
-                    Log::info("Deletion SMS sent for Printed Sale ID: " . $sale->id);
-
-                } catch (\Exception $smsEx) {
-                    // We catch SMS errors separately so the DB deletion still happens
-                    Log::error("Deletion SMS Failed: " . $smsEx->getMessage());
-                }
             }
 
             // 2. Perform actual deletion and update stock
@@ -2520,6 +2479,14 @@ class SalesEntryController extends Controller
                 ], 404);
             }
 
+            // Get the customer_code from the first sale (all sales for same bill will have same customer_code)
+            $customerCode = $sales->first()->customer_code;
+
+            // Delete debtor records for this bill_no and customer_code
+            $deletedDebtors = Debtor::where('bill_no', $billNo)
+                ->where('customer_code', $customerCode)
+                ->delete();
+
             // Reset all payment-related fields to their original state (before any payments)
             foreach ($sales as $sale) {
                 $sale->update([
@@ -2552,10 +2519,16 @@ class SalesEntryController extends Controller
             }
 
             DB::commit();
+
+            $debtorMessage = $deletedDebtors > 0
+                ? " and {$deletedDebtors} debtor record(s) deleted"
+                : "";
+
             return response()->json([
                 'success' => true,
-                'message' => "All payments for Bill #{$billNo} have been reversed successfully",
-                'affected_records' => $sales->count()
+                'message' => "All payments for Bill #{$billNo} have been reversed successfully{$debtorMessage}",
+                'affected_records' => $sales->count(),
+                'deleted_debtors' => $deletedDebtors
             ]);
 
         } catch (\Exception $e) {

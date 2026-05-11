@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Customer;
 use App\Models\SalesHistory;
 use App\Models\Supplier;
+use App\Models\SupplierLoan;
 use Illuminate\Http\Request;
 use App\Models\Sale;
 use Illuminate\Support\Facades\DB;
@@ -875,6 +877,522 @@ private function sendReprintSMS($data, $records, $token)
         throw $e;
     }
 }
- 
-
+// In your SupplierController.php
+public function getSuppliersWithBills()
+{
+    $suppliers = DB::table('sales')
+        ->select('supplier_code', 'supplier_bill_no')
+        ->whereNotNull('supplier_bill_no')
+        ->distinct()
+        ->get();
+    
+    return response()->json(['success' => true, 'data' => $suppliers]);
+}
+public function getDetailedReport($supplierCode)
+    {
+        // Get all sales for this supplier
+        $sales = Sale::where('supplier_code', $supplierCode)
+            ->orderBy('created_at', 'desc')
+            ->get();
+        
+        // Get all loan payments for this supplier
+        $loans = SupplierLoan::where('code', $supplierCode)
+            ->orderBy('created_at', 'desc')
+            ->get();
+        
+        // Calculate summary statistics
+        $summary = [
+            'total_sales_value' => $sales->sum('SupplierTotal'),
+            'total_sales_count' => $sales->count(),
+            'unique_bills' => $sales->whereNotNull('supplier_bill_no')->unique('supplier_bill_no')->count(),
+            'total_paid' => $loans->sum('loan_amount'),
+            'total_remaining' => $sales->sum('SupplierTotal') - $loans->sum('loan_amount'),
+            'total_cheque_payments' => $loans->where('type', 'Cheque')->sum('loan_amount'),
+            'total_cash_payments' => $loans->where('type', 'Cash')->sum('loan_amount'),
+            'total_bank_transfers' => $loans->where('type', 'Bank Transfer')->sum('loan_amount'),
+            'total_bag_to_box' => $loans->where('type', 'bag_to_box')->sum('loan_amount'),
+            'total_bill_to_bill' => $loans->where('type', 'bill_to_bill')->sum('loan_amount'),
+            'total_bad_debt' => $loans->where('type', 'bad_debt')->sum('loan_amount'),
+        ];
+        
+        // Group sales by bill number
+        $bills = [];
+        foreach ($sales as $sale) {
+            $billNo = $sale->supplier_bill_no ?? 'No Bill';
+            if (!isset($bills[$billNo])) {
+                $bills[$billNo] = [
+                    'bill_no' => $billNo,
+                    'date' => $sale->created_at,
+                    'items' => [],
+                    'total_amount' => 0,
+                    'paid_amount' => 0,
+                    'payments' => []
+                ];
+            }
+            $bills[$billNo]['items'][] = $sale;
+            $bills[$billNo]['total_amount'] += $sale->SupplierTotal;
+        }
+        
+        // Add payment information to each bill
+        foreach ($loans as $loan) {
+            if ($loan->bill_no && isset($bills[$loan->bill_no])) {
+                $bills[$loan->bill_no]['paid_amount'] += $loan->loan_amount;
+                $bills[$loan->bill_no]['payments'][] = $loan;
+            }
+        }
+        
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'supplier_code' => $supplierCode,
+                'summary' => $summary,
+                'bills' => array_values($bills),
+                'all_payments' => $loans,
+                'all_sales' => $sales
+            ]
+        ]);
+    }
+     public function getDebtorReport(Request $request)
+    {
+        try {
+            $search = $request->get('search', '');
+            $limit = $request->get('limit', 50);
+            
+            // Get debtor customers
+            $debtors = Customer::where('Debtor', 'Y')
+                ->when($search, function ($query, $search) {
+                    return $query->where(function ($q) use ($search) {
+                        $q->where('short_name', 'LIKE', "%{$search}%")
+                          ->orWhere('name', 'LIKE', "%{$search}%")
+                          ->orWhere('telephone_no', 'LIKE', "%{$search}%");
+                    });
+                })
+                ->get();
+            
+            $debtorData = [];
+            
+            foreach ($debtors as $debtor) {
+                // Get all sales for this customer
+                $sales = Sale::where('customer_code', $debtor->short_name)
+                    ->where('bill_printed', 'Y')
+                    ->get();
+                
+                // Calculate totals
+                $totalSales = 0;
+                $totalGiven = 0;
+                $totalPackCost = 0;
+                $bills = [];
+                
+                // Group by bill number
+                $billGroups = $sales->groupBy('bill_no');
+                
+                foreach ($billGroups as $billNo => $billSales) {
+                    $billTotal = 0;
+                    $billGiven = 0;
+                    $billItems = [];
+                    
+                    foreach ($billSales as $sale) {
+                        $itemTotal = (float)$sale->total + ((float)$sale->packs * (float)$sale->CustomerPackCost);
+                        $billTotal += $itemTotal;
+                        $totalSales += $itemTotal;
+                        $totalPackCost += (float)$sale->packs * (float)$sale->CustomerPackCost;
+                        
+                        $billItems[] = [
+                            'supplier_code' => $sale->supplier_code,
+                            'item_name' => $sale->item_name,
+                            'weight' => (float)$sale->weight,
+                            'price_per_kg' => (float)$sale->price_per_kg,
+                            'packs' => (int)$sale->packs,
+                            'total' => $itemTotal,
+                            'date' => $sale->created_at
+                        ];
+                    }
+                    
+                    // Get given amount and payment history for this bill
+                    $billGiven = (float)($billSales->first()->given_amount ?? 0);
+                    $totalGiven += $billGiven;
+                    $paymentHistory = $billSales->first()->payment_history ?? [];
+                    
+                    $bills[] = [
+                        'bill_no' => $billNo ?: 'N/A',
+                        'total_amount' => $billTotal,
+                        'given_amount' => $billGiven,
+                        'remaining' => max(0, $billTotal - $billGiven),
+                        'status' => ($billTotal - $billGiven) <= 0 ? 'Paid' : 'Pending',
+                        'items' => $billItems,
+                        'payment_history' => $paymentHistory,
+                        'created_at' => $billSales->first()->created_at
+                    ];
+                }
+                
+                $debtorData[] = [
+                    'code' => $debtor->short_name,
+                    'name' => $debtor->name,
+                    'telephone' => $debtor->telephone_no,
+                    'address' => $debtor->address,
+                    'id_no' => $debtor->ID_NO,
+                    'credit_limit' => (float)$debtor->credit_limit,
+                    'profile_pic' => $debtor->profile_pic,
+                    'nic_front' => $debtor->nic_front,
+                    'nic_back' => $debtor->nic_back,
+                    'total_sales' => $totalSales,
+                    'total_paid' => $totalGiven,
+                    'total_remaining' => max(0, $totalSales - $totalGiven),
+                    'pack_cost_total' => $totalPackCost,
+                    'bill_count' => count($bills),
+                    'bills' => $bills,
+                    'status' => ($totalSales - $totalGiven) <= 0 ? 'Fully Paid' : 'Has Balance'
+                ];
+            }
+            
+            // Sort by remaining amount (highest first)
+            usort($debtorData, function ($a, $b) {
+                return $b['total_remaining'] <=> $a['total_remaining'];
+            });
+            
+            // Apply limit
+            if ($limit) {
+                $debtorData = array_slice($debtorData, 0, $limit);
+            }
+            
+            $summary = [
+                'total_debtors' => count($debtorData),
+                'total_sales_amount' => array_sum(array_column($debtorData, 'total_sales')),
+                'total_paid_amount' => array_sum(array_column($debtorData, 'total_paid')),
+                'total_remaining_amount' => array_sum(array_column($debtorData, 'total_remaining')),
+                'total_bills' => array_sum(array_column($debtorData, 'bill_count'))
+            ];
+            
+            return response()->json([
+                'success' => true,
+                'data' => $debtorData,
+                'summary' => $summary
+            ]);
+            
+        } catch (\Exception $e) {
+            Log::error('Debtor report error: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch debtor report',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+    
+    /**
+     * Get creditor report (Suppliers with Creditor = 'Y')
+     */
+    public function getCreditorReport(Request $request)
+    {
+        try {
+            $search = $request->get('search', '');
+            $limit = $request->get('limit', 50);
+            
+            // Get creditor suppliers
+            $creditors = Supplier::where('Creditor', 'Y')
+                ->when($search, function ($query, $search) {
+                    return $query->where(function ($q) use ($search) {
+                        $q->where('code', 'LIKE', "%{$search}%")
+                          ->orWhere('name', 'LIKE', "%{$search}%")
+                          ->orWhere('telephone_no', 'LIKE', "%{$search}%");
+                    });
+                })
+                ->get();
+            
+            $creditorData = [];
+            
+            foreach ($creditors as $creditor) {
+                // Get supplier loans
+                $loans = SupplierLoan::where('code', $creditor->code)
+                    ->orderBy('created_at', 'desc')
+                    ->get();
+                
+                // Get sales where this supplier is involved
+                $sales = Sale::where('supplier_code', $creditor->code)
+                    ->whereNotNull('supplier_bill_no')
+                    ->get();
+                
+                $totalSupplierAmount = $sales->sum('SupplierTotal');
+                $totalPaid = $loans->sum('loan_amount');
+                $totalRemaining = max(0, $totalSupplierAmount - $totalPaid);
+                
+                $bills = [];
+                $billGroups = $sales->groupBy('supplier_bill_no');
+                
+                foreach ($billGroups as $billNo => $billSales) {
+                    $billTotal = $billSales->sum('SupplierTotal');
+                    $billPaid = $loans->where('bill_no', $billNo)->sum('loan_amount');
+                    
+                    $bills[] = [
+                        'bill_no' => $billNo ?: 'N/A',
+                        'total_amount' => (float)$billTotal,
+                        'paid_amount' => (float)$billPaid,
+                        'remaining' => max(0, $billTotal - $billPaid),
+                        'status' => ($billTotal - $billPaid) <= 0 ? 'Settled' : 'Pending',
+                        'created_at' => $billSales->first()->created_at
+                    ];
+                }
+                
+                // Get payment details
+                $payments = [];
+                foreach ($loans as $loan) {
+                    $payments[] = [
+                        'id' => $loan->id,
+                        'date' => $loan->created_at,
+                        'amount' => (float)$loan->loan_amount,
+                        'type' => $loan->type,
+                        'payment_method_display' => $loan->payment_method_display,
+                        'icon' => $loan->payment_icon,
+                        'bill_no' => $loan->bill_no,
+                        'cheque_no' => $loan->cheque_no,
+                        'transfer_reference_no' => $loan->transfer_reference_no,
+                        'bad_debt_name' => $loan->bad_debt_name
+                    ];
+                }
+                
+                $creditorData[] = [
+                    'code' => $creditor->code,
+                    'name' => $creditor->name,
+                    'telephone' => $creditor->telephone_no,
+                    'address' => $creditor->address,
+                    'dob' => $creditor->dob,
+                    'profile_pic' => $creditor->profile_pic,
+                    'nic_front' => $creditor->nic_front,
+                    'nic_back' => $creditor->nic_back,
+                    'advance_amount' => (float)$creditor->advance_amount,
+                    'total_supplier_amount' => $totalSupplierAmount,
+                    'total_paid' => $totalPaid,
+                    'total_remaining' => $totalRemaining,
+                    'bill_count' => count($bills),
+                    'payment_count' => count($payments),
+                    'bills' => $bills,
+                    'payments' => $payments,
+                    'status' => $totalRemaining <= 0 ? 'Fully Settled' : 'Has Balance'
+                ];
+            }
+            
+            // Sort by remaining amount
+            usort($creditorData, function ($a, $b) {
+                return $b['total_remaining'] <=> $a['total_remaining'];
+            });
+            
+            if ($limit) {
+                $creditorData = array_slice($creditorData, 0, $limit);
+            }
+            
+            $summary = [
+                'total_creditors' => count($creditorData),
+                'total_supplier_amount' => array_sum(array_column($creditorData, 'total_supplier_amount')),
+                'total_paid_amount' => array_sum(array_column($creditorData, 'total_paid')),
+                'total_remaining_amount' => array_sum(array_column($creditorData, 'total_remaining')),
+                'total_bills' => array_sum(array_column($creditorData, 'bill_count')),
+                'total_payments' => array_sum(array_column($creditorData, 'payment_count'))
+            ];
+            
+            return response()->json([
+                'success' => true,
+                'data' => $creditorData,
+                'summary' => $summary
+            ]);
+            
+        } catch (\Exception $e) {
+            Log::error('Creditor report error: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch creditor report',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+    
+    /**
+     * Get combined debtor and creditor report
+     */
+    public function getCombinedReport(Request $request)
+    {
+        try {
+            $debtorResponse = $this->getDebtorReport($request);
+            $creditorResponse = $this->getCreditorReport($request);
+            
+            $debtorData = $debtorResponse->getData(true);
+            $creditorData = $creditorResponse->getData(true);
+            
+            return response()->json([
+                'success' => true,
+                'debtors' => $debtorData['data'] ?? [],
+                'debtor_summary' => $debtorData['summary'] ?? [],
+                'creditors' => $creditorData['data'] ?? [],
+                'creditor_summary' => $creditorData['summary'] ?? [],
+                'combined_summary' => [
+                    'total_debtors' => $debtorData['summary']['total_debtors'] ?? 0,
+                    'total_creditors' => $creditorData['summary']['total_creditors'] ?? 0,
+                    'total_debtor_outstanding' => $debtorData['summary']['total_remaining_amount'] ?? 0,
+                    'total_creditor_outstanding' => $creditorData['summary']['total_remaining_amount'] ?? 0
+                ]
+            ]);
+            
+        } catch (\Exception $e) {
+            Log::error('Combined report error: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch combined report',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+    
+    /**
+     * Get debtor details by code
+     */
+    public function getDebtorDetails($code)
+    {
+        try {
+            $debtor = Customer::where('short_name', $code)
+                ->where('Debtor', 'Y')
+                ->first();
+                
+            if (!$debtor) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Debtor not found'
+                ], 404);
+            }
+            
+            $sales = Sale::where('customer_code', $code)
+                ->where('bill_printed', 'Y')
+                ->orderBy('created_at', 'desc')
+                ->get();
+                
+            $bills = [];
+            $billGroups = $sales->groupBy('bill_no');
+            
+            foreach ($billGroups as $billNo => $billSales) {
+                $billTotal = 0;
+                foreach ($billSales as $sale) {
+                    $billTotal += (float)$sale->total + ((float)$sale->packs * (float)$sale->CustomerPackCost);
+                }
+                
+                $bills[] = [
+                    'bill_no' => $billNo ?: 'N/A',
+                    'total_amount' => $billTotal,
+                    'given_amount' => (float)($billSales->first()->given_amount ?? 0),
+                    'payment_history' => $billSales->first()->payment_history ?? [],
+                    'items' => $billSales->map(function($sale) {
+                        return [
+                            'supplier_code' => $sale->supplier_code,
+                            'item_name' => $sale->item_name,
+                            'weight' => (float)$sale->weight,
+                            'price_per_kg' => (float)$sale->price_per_kg,
+                            'packs' => (int)$sale->packs,
+                            'total' => (float)$sale->total + ((float)$sale->packs * (float)$sale->CustomerPackCost)
+                        ];
+                    }),
+                    'created_at' => $billSales->first()->created_at
+                ];
+            }
+            
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'code' => $debtor->short_name,
+                    'name' => $debtor->name,
+                    'telephone' => $debtor->telephone_no,
+                    'address' => $debtor->address,
+                    'id_no' => $debtor->ID_NO,
+                    'credit_limit' => (float)$debtor->credit_limit,
+                    'profile_pic' => $debtor->profile_pic,
+                    'nic_front' => $debtor->nic_front,
+                    'nic_back' => $debtor->nic_back,
+                    'bills' => $bills
+                ]
+            ]);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch debtor details'
+            ], 500);
+        }
+    }
+    
+    /**
+     * Get creditor details by code
+     */
+    public function getCreditorDetails($code)
+    {
+        try {
+            $creditor = Supplier::where('code', $code)
+                ->where('Creditor', 'Y')
+                ->first();
+                
+            if (!$creditor) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Creditor not found'
+                ], 404);
+            }
+            
+            $loans = SupplierLoan::where('code', $code)
+                ->orderBy('created_at', 'desc')
+                ->get();
+                
+            $sales = Sale::where('supplier_code', $code)
+                ->whereNotNull('supplier_bill_no')
+                ->get();
+                
+            $bills = [];
+            $billGroups = $sales->groupBy('supplier_bill_no');
+            
+            foreach ($billGroups as $billNo => $billSales) {
+                $bills[] = [
+                    'bill_no' => $billNo ?: 'N/A',
+                    'total_amount' => (float)$billSales->sum('SupplierTotal'),
+                    'created_at' => $billSales->first()->created_at,
+                    'items' => $billSales->map(function($sale) {
+                        return [
+                            'customer_code' => $sale->customer_code,
+                            'item_name' => $sale->item_name,
+                            'weight' => (float)$sale->weight,
+                            'price_per_kg' => (float)$sale->SupplierPricePerKg,
+                            'total' => (float)$sale->SupplierTotal
+                        ];
+                    })
+                ];
+            }
+            
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'code' => $creditor->code,
+                    'name' => $creditor->name,
+                    'telephone' => $creditor->telephone_no,
+                    'address' => $creditor->address,
+                    'dob' => $creditor->dob,
+                    'advance_amount' => (float)$creditor->advance_amount,
+                    'profile_pic' => $creditor->profile_pic,
+                    'nic_front' => $creditor->nic_front,
+                    'nic_back' => $creditor->nic_back,
+                    'bills' => $bills,
+                    'payments' => $loans->map(function($loan) {
+                        return [
+                            'id' => $loan->id,
+                            'date' => $loan->created_at,
+                            'amount' => (float)$loan->loan_amount,
+                            'type' => $loan->type,
+                            'payment_method_display' => $loan->payment_method_display,
+                            'icon' => $loan->payment_icon,
+                            'bill_no' => $loan->bill_no,
+                            'cheque_no' => $loan->cheque_no
+                        ];
+                    })
+                ]
+            ]);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch creditor details'
+            ], 500);
+        }
+    }
 }

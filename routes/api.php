@@ -17,6 +17,7 @@ use App\Http\Controllers\SalesEntryController;
 use App\Http\Controllers\CommissionController;
 use App\Models\Setting;
 use App\Http\Controllers\BankController;
+use App\Http\Controllers\DebtorController;
 
 // ----------------------------------------------------------------------
 // 🚨 PUBLIC ROUTES (No Authentication Required) 🚨
@@ -111,6 +112,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/suppliers/delete-loan-record', [SupplierLoanController::class, 'deleteLoanRecord']);
     Route::get('/suppliers/bill/{billNo}/details', [SupplierLoanController::class, 'getSupplierBillDetails']);
     Route::get('/suppliers/unprinted-details/{supplierCode}', [SupplierLoanController::class, 'getUnprintedDetails']);
+    Route::get('/suppliers/with-bills', [SupplierController::class, 'getSuppliersWithBills']); // ✅ MOVED HERE - BEFORE apiResource
 
     // Default REST API (must come AFTER specific routes)
     Route::apiResource('suppliers', SupplierController::class);
@@ -340,8 +342,26 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/income-expense-report', [CustomersLoanController::class, 'getIncomeExpenseReport']);
     Route::get('/income-expense-category-summary', [CustomersLoanController::class, 'getCategorySummary']);
     Route::get('/income-expense-export', [CustomersLoanController::class, 'exportReport']);
-    //supplier creditior related routes
-    // routes/api.php
+
+    // ==================== SUPPLIER CREDITOR ROUTES ====================
     Route::get('/suppliers/check-creditor/{code}', [SupplierController::class, 'getSupplierByCode']);
     Route::post('/suppliers/check-or-create-creditor', [SupplierController::class, 'checkOrCreateCreditor']);
+
+    // ==================== SUPPLIER DETAILED REPORT ====================
+    Route::get('/supplier-detailed-report/{supplierCode}', [SupplierController::class, 'getDetailedReport']);
+    // Debtor/Creditor Report Routes
+    Route::prefix('debtor-creditor')->group(function () {
+        Route::get('/debtors', [SupplierController::class, 'getDebtorReport']);
+        Route::get('/creditors', [SupplierController::class, 'getCreditorReport']);
+        Route::get('/combined', [SupplierController::class, 'getCombinedReport']);
+        Route::get('/debtor/{code}', [SupplierController::class, 'getDebtorDetails']);
+        Route::get('/creditor/{code}', [SupplierController::class, 'getCreditorDetails']);
+    });
+    Route::prefix('debtors')->group(function () {
+    Route::post('/create', [DebtorController::class, 'createDebtor']);
+    Route::put('/update-payment', [DebtorController::class, 'updateDebtorPayment']);  // Make sure this is PUT
+    Route::get('/{billNo}', [DebtorController::class, 'getDebtor']);
+    Route::get('/customer/{customerCode}', [DebtorController::class, 'getCustomerDebtors']);
+    Route::get('/pending/all', [DebtorController::class, 'getPendingDebtors']);
+});
 });
