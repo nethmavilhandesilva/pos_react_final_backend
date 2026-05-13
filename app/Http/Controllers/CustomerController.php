@@ -14,91 +14,121 @@ class CustomerController extends Controller
 {
     public function apiIndex()
     {
-        $customers = Customer::select('id', 'name', 'short_name', 'credit_limit', 'profile_pic', 'nic_front', 'nic_back', 'telephone_no', 'Debtor')->get();
+        $customers = Customer::select('id', 'name', 'short_name', 'credit_limit', 'profile_pic', 'nic_front', 'nic_back', 'telephone_no', 'Debtor', 'Debtor_no')->get();
         return response()->json($customers);
     }
 
-  public function apiStore(Request $request)
-    {
-        $data = $request->validate([
-            'short_name'   => 'nullable|string',
-            'name'         => 'nullable|string',
-            'ID_NO'        => 'nullable|string',
-            'telephone_no' => 'nullable|string',
-            'address'      => 'nullable|string',
-            'credit_limit' => 'nullable|numeric',
-            'profile_pic'  => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
-            'nic_front'    => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
-            'nic_back'     => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
-            'Debtor'       => 'nullable|in:Y,N',
-        ]);
+  // In CustomerController.php, update the apiStore method to properly handle bill_no
+public function apiStore(Request $request)
+{
+    \Log::info('apiStore request received', [
+        'all_data' => $request->all(),
+        'bill_no_from_request' => $request->bill_no
+    ]);
 
-        // Handle File Uploads
-        if ($request->hasFile('profile_pic')) {
-            $data['profile_pic'] = $request->file('profile_pic')->store('customers/profiles', 'public');
-        }
-        if ($request->hasFile('nic_front')) {
-            $data['nic_front'] = $request->file('nic_front')->store('customers/nic', 'public');
-        }
-        if ($request->hasFile('nic_back')) {
-            $data['nic_back'] = $request->file('nic_back')->store('customers/nic', 'public');
-        }
+    $data = $request->validate([
+        'short_name' => 'nullable|string',
+        'name' => 'nullable|string',
+        'ID_NO' => 'nullable|string',
+        'telephone_no' => 'nullable|string',
+        'address' => 'nullable|string',
+        'credit_limit' => 'nullable|numeric',
+        'profile_pic' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+        'nic_front' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+        'nic_back' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+        'Debtor' => 'nullable|in:Y,N',
+        'bill_no' => 'nullable|string',  // Make sure this is included
+    ]);
 
-        if (!empty($data['short_name'])) {
-            $data['short_name'] = strtoupper($data['short_name']);
-        }
-
-        // Set Debtor default if not provided
-        if (!isset($data['Debtor'])) {
-            $data['Debtor'] = 'N';
-        }
-
-        DB::beginTransaction();
-        
-        try {
-            // Generate Debtor number if Debtor is Y
-            if ($data['Debtor'] === 'Y') {
-                $data['Debtor_no'] = DebtorNumberHelper::generateDebtorNumber();
-            }
-
-            $customer = Customer::create($data);
-            
-            // If customer is marked as Debtor, create a debtor record
-            if ($data['Debtor'] === 'Y' && $data['Debtor_no']) {
-                Debtor::create([
-                    'bill_no' => null, // No bill number for initial debtor registration
-                    'customer_code' => $customer->short_name,
-                    'credit_amount' => 0,
-                    'paid_amount' => 0,
-                    'remaining_amount' => 0,
-                    'status' => 'pending',
-                    'settled_way' => 'registration',
-                    'Debtor_no' => $data['Debtor_no']
-                ]);
-            }
-            
-            DB::commit();
-            
-            return response()->json($customer, 201);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            \Log::error('Error creating customer with debtor record: ' . $e->getMessage());
-            return response()->json(['error' => 'Failed to create customer'], 500);
-        }
+    // Handle File Uploads
+    if ($request->hasFile('profile_pic')) {
+        $data['profile_pic'] = $request->file('profile_pic')->store('customers/profiles', 'public');
     }
+
+    if ($request->hasFile('nic_front')) {
+        $data['nic_front'] = $request->file('nic_front')->store('customers/nic', 'public');
+    }
+
+    if ($request->hasFile('nic_back')) {
+        $data['nic_back'] = $request->file('nic_back')->store('customers/nic', 'public');
+    }
+
+    if (!empty($data['short_name'])) {
+        $data['short_name'] = strtoupper($data['short_name']);
+    }
+
+    // Set Debtor default if not provided
+    if (!isset($data['Debtor'])) {
+        $data['Debtor'] = 'N';
+    }
+
+    DB::beginTransaction();
+
+    try {
+        // Generate Debtor number if Debtor is Y
+        $debtorNumber = null;
+        if ($data['Debtor'] === 'Y') {
+            $debtorNumber = DebtorNumberHelper::generateDebtorNumber();
+            $data['Debtor_no'] = $debtorNumber;
+            \Log::info('Generated Debtor Number', ['Debtor_no' => $debtorNumber]);
+        }
+
+        $customer = Customer::create($data);
+        \Log::info('Customer created successfully', ['customer_id' => $customer->id, 'customer_short_name' => $customer->short_name]);
+
+        // If customer is marked as Debtor, create a debtor record
+        if ($data['Debtor'] === 'Y' && $debtorNumber) {
+            \Log::info('Creating debtor record with bill_no:', ['bill_no' => $data['bill_no'] ?? null]);
+            
+            // Create debtor record with the bill number
+            $debtorData = [
+                'bill_no' => $data['bill_no'] ?? null,  // ✅ Make sure bill_no is included
+                'customer_code' => $customer->short_name,
+                'credit_amount' => 0,
+                'paid_amount' => 0,
+                'remaining_amount' => 0,
+                'status' => 'pending',
+                'settled_way' => 'registration',
+                'Debtor_no' => $debtorNumber
+            ];
+            
+            \Log::info('Debtor data to create:', $debtorData);
+            
+            $debtor = Debtor::create($debtorData);
+            
+            \Log::info('Debtor record created', [
+                'debtor_id' => $debtor->id,
+                'stored_bill_no' => $debtor->bill_no,
+                'customer_code' => $debtor->customer_code
+            ]);
+        }
+
+        DB::commit();
+
+        return response()->json($customer, 201);
+    } catch (\Exception $e) {
+        DB::rollBack();
+        \Log::error('Error creating customer with debtor record', [
+            'message' => $e->getMessage(),
+            'line' => $e->getLine(),
+            'file' => $e->getFile(),
+        ]);
+        return response()->json(['error' => 'Failed to create customer: ' . $e->getMessage()], 500);
+    }
+}
     public function apiUpdate(Request $request, Customer $customer)
     {
         $data = $request->validate([
-            'short_name'   => 'nullable|string',
-            'name'         => 'nullable|string',
-            'ID_NO'        => 'nullable|string',
+            'short_name' => 'nullable|string',
+            'name' => 'nullable|string',
+            'ID_NO' => 'nullable|string',
             'telephone_no' => 'nullable|string',
-            'address'      => 'nullable|string',
+            'address' => 'nullable|string',
             'credit_limit' => 'nullable|numeric',
-            'profile_pic'  => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
-            'nic_front'    => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
-            'nic_back'     => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
-            'Debtor'       => 'nullable|in:Y,N',
+            'profile_pic' => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
+            'nic_front' => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
+            'nic_back' => 'nullable|file|mimes:jpg,jpeg,png|max:2048',
+            'Debtor' => 'nullable|in:Y,N',
         ]);
 
         $fields = ['profile_pic', 'nic_front', 'nic_back'];
@@ -174,87 +204,149 @@ class CustomerController extends Controller
         ]);
     }
 
-  public function updateDebtorStatus(Request $request)
+    public function updateDebtorStatus(Request $request)
 {
     $request->validate([
         'short_name' => 'required|string',
+        'customer_id' => 'nullable|integer', // Add customer_id validation
         'Debtor' => 'required|in:Y,N',
-        'bill_no' => 'nullable|string'  // Add bill_no validation
+        'bill_no' => 'nullable|string'
     ]);
 
     DB::beginTransaction();
-    
+
     try {
-        $customer = Customer::where('short_name', strtoupper($request->short_name))->first();
+        // Find customer by ID if provided, otherwise by short_name
+        $customer = null;
+        if ($request->customer_id) {
+            $customer = Customer::find($request->customer_id);
+        }
+        
+        if (!$customer && $request->short_name) {
+            $customer = Customer::where('short_name', strtoupper($request->short_name))->first();
+        }
 
         if (!$customer) {
             return response()->json(['success' => false, 'message' => 'Customer not found'], 404);
         }
 
         $updateData = ['Debtor' => $request->Debtor];
-        $debtorNumber = null;
-        
+        $debtorNumber = $customer->Debtor_no;
+        $wasNewDebtorRecordCreated = false;
+
+        \Log::info('UpdateDebtorStatus called', [
+            'customer_short_name' => $customer->short_name,
+            'customer_id' => $customer->id,
+            'existing_debtor_no' => $customer->Debtor_no,
+            'request_bill_no' => $request->bill_no,
+            'request_Debtor' => $request->Debtor,
+            'provided_customer_id' => $request->customer_id
+        ]);
+
         // If setting as Debtor
         if ($request->Debtor === 'Y') {
-            // Generate new debtor number if not exists
+            // Use existing Debtor_no, DO NOT generate a new one
             if (empty($customer->Debtor_no)) {
                 $debtorNumber = DebtorNumberHelper::generateDebtorNumber();
                 $updateData['Debtor_no'] = $debtorNumber;
-            } else {
-                $debtorNumber = $customer->Debtor_no;
-            }
-            
-            // ✅ Check if debtor record already exists for this customer AND specific bill
-            $existingDebtor = Debtor::where('customer_code', $customer->short_name)
-                ->where('bill_no', $request->bill_no)  // Match specific bill
-                ->first();
-            
-            // Create debtor record with bill number if it doesn't exist
-            if (!$existingDebtor && $request->bill_no) {
-                Debtor::create([
-                    'bill_no' => $request->bill_no,  // ✅ Use the bill_no from request
+                \Log::info('Generated new debtor number', [
                     'customer_code' => $customer->short_name,
-                    'credit_amount' => 0,
-                    'paid_amount' => 0,
-                    'remaining_amount' => 0,
-                    'status' => 'pending',
-                    'settled_way' => 'credit',  // Use 'credit' instead of 'registration'
-                    'Debtor_no' => $debtorNumber
-                ]);
-                \Log::info('Debtor record created from status update', [
-                    'bill_no' => $request->bill_no,
-                    'customer_code' => $customer->short_name,
+                    'customer_id' => $customer->id,
                     'debtor_no' => $debtorNumber
                 ]);
-            } elseif (!$existingDebtor && !$request->bill_no) {
-                // Create registration record without bill number
-                Debtor::create([
-                    'bill_no' => null,
+            } else {
+                $debtorNumber = $customer->Debtor_no;
+                \Log::info('Using existing debtor number from customer', [
+                    'customer_code' => $customer->short_name,
+                    'customer_id' => $customer->id,
+                    'debtor_no' => $debtorNumber
+                ]);
+            }
+
+            // Check if debtor record already exists for this specific bill
+            $existingDebtor = null;
+            if ($request->bill_no) {
+                $existingDebtor = Debtor::where('customer_code', $customer->short_name)
+                    ->where('bill_no', $request->bill_no)
+                    ->first();
+                
+                \Log::info('Checking for existing debtor', [
+                    'customer_code' => $customer->short_name,
+                    'customer_id' => $customer->id,
+                    'bill_no' => $request->bill_no,
+                    'exists' => $existingDebtor ? true : false,
+                    'existing_debtor_no' => $existingDebtor ? $existingDebtor->Debtor_no : null
+                ]);
+            }
+
+            // Create debtor record with bill number if it doesn't exist
+            if (!$existingDebtor && $request->bill_no) {
+                $debtor = Debtor::create([
+                    'bill_no' => $request->bill_no,
                     'customer_code' => $customer->short_name,
                     'credit_amount' => 0,
                     'paid_amount' => 0,
                     'remaining_amount' => 0,
                     'status' => 'pending',
-                    'settled_way' => 'credit',
+                    'settled_way' => 'registration',
                     'Debtor_no' => $debtorNumber
+                ]);
+                $wasNewDebtorRecordCreated = true;
+                
+                \Log::info('NEW debtor record created', [
+                    'bill_no' => $request->bill_no,
+                    'customer_code' => $customer->short_name,
+                    'customer_id' => $customer->id,
+                    'debtor_no' => $debtorNumber,
+                    'debtor_id' => $debtor->id
+                ]);
+            } elseif ($existingDebtor) {
+                \Log::info('Debtor record already exists for this bill', [
+                    'bill_no' => $request->bill_no,
+                    'customer_code' => $customer->short_name,
+                    'existing_debtor_id' => $existingDebtor->id,
+                    'existing_debtor_no' => $existingDebtor->Debtor_no
                 ]);
             }
         }
-        
+
+        // Update customer
         $customer->update($updateData);
-        
+
         DB::commit();
-        
+
+        $message = '';
+        if ($request->Debtor === 'Y') {
+            if ($wasNewDebtorRecordCreated) {
+                $message = $request->bill_no 
+                    ? "Debtor record created successfully for Bill #{$request->bill_no} with Debtor No: {$debtorNumber}"
+                    : "Debtor registered successfully with Debtor No: {$debtorNumber}";
+            } else {
+                $message = $request->bill_no 
+                    ? "Debtor record already exists for Bill #{$request->bill_no} with Debtor No: {$debtorNumber}"
+                    : "Debtor status updated successfully. Debtor No: {$debtorNumber}";
+            }
+        } else {
+            $message = "Customer debtor status removed";
+        }
+
         return response()->json([
-            'success' => true, 
+            'success' => true,
+            'message' => $message,
             'customer' => $customer,
-            'debtor_no' => $customer->Debtor_no
+            'debtor_no' => $debtorNumber,
+            'was_new_record_created' => $wasNewDebtorRecordCreated
         ]);
+        
     } catch (\Exception $e) {
         DB::rollBack();
-        \Log::error('Error updating debtor status: ' . $e->getMessage());
+        \Log::error('Error updating debtor status: ' . $e->getMessage(), [
+            'trace' => $e->getTraceAsString(),
+            'request_data' => $request->all()
+        ]);
+        
         return response()->json([
-            'success' => false, 
+            'success' => false,
             'message' => 'Failed to update debtor status: ' . $e->getMessage()
         ], 500);
     }

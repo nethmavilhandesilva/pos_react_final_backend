@@ -19,7 +19,7 @@ public function createDebtorWithCustomer(Request $request)
         'bill_no' => 'nullable|string',
         'customer_code' => 'required|string',
         'credit_amount' => 'numeric|min:0',
-        'debtor_no' => 'required|string'
+      
     ]);
 
     try {
@@ -48,7 +48,7 @@ public function createDebtorWithCustomer(Request $request)
                 'remaining_amount' => $request->credit_amount ?? 0,
                 'status' => 'pending',
                 'settled_way' => 'registration',
-                'Debtor_no' => $request->debtor_no
+               
             ]);
 
             \Log::info('Debtor record created with customer registration', [
@@ -96,7 +96,7 @@ public function createDebt(Request $request)
         'bill_no' => 'nullable|string',
         'customer_code' => 'required|string',
         'credit_amount' => 'numeric|min:0',
-        'debtor_no' => 'nullable|string'
+       
     ]);
 
     try {
@@ -108,7 +108,7 @@ public function createDebt(Request $request)
             'bill_no' => $request->bill_no,
             'customer_code' => $request->customer_code,
             'credit_amount' => $request->credit_amount,
-            'debtor_no' => $request->debtor_no,
+           
             'full_request' => $request->all()
         ]);
 
@@ -122,13 +122,13 @@ public function createDebt(Request $request)
                 'customer_code' => $request->customer_code,
                 'credit_amount' => $request->credit_amount ?? 0,
                 'remaining_amount' => $request->credit_amount ?? 0,
-                'Debtor_no' => $request->debtor_no
+               
             ]);
 
             \Log::info('Existing debtor updated', [
                 'bill_no' => $request->bill_no,
                 'customer_code' => $request->customer_code,
-                'debtor_no' => $request->debtor_no
+               
             ]);
 
         } else {
@@ -142,13 +142,13 @@ public function createDebt(Request $request)
                 'remaining_amount' => $request->credit_amount ?? 0,
                 'status' => 'pending',
                 'settled_way' => 'registration',
-                'Debtor_no' => $request->debtor_no
+                
             ]);
 
             \Log::info('New debtor record created', [
                 'bill_no' => $request->bill_no,
                 'customer_code' => $request->customer_code,
-                'debtor_no' => $request->debtor_no
+               
             ]);
         }
 

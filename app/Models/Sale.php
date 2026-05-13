@@ -72,6 +72,7 @@ class Sale extends Model
         'adjustment_amount',
         'bank_account_id',
         'payment_history',
+         'Debtor_no',
     ];
 
     protected $casts = [

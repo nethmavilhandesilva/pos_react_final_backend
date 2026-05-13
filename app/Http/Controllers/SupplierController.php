@@ -1244,7 +1244,7 @@ public function store(Request $request)
     /**
      * Get combined debtor and creditor report
      */
-    public function getCombinedReport(Request $request)
+ public function getCombinedReport(Request $request)
     {
         try {
             $debtorResponse = $this->getDebtorReport($request);
