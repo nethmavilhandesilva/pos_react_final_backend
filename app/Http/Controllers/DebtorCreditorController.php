@@ -294,7 +294,7 @@ class DebtorCreditorController extends Controller
                         $code
                     );
                     
-                    $netBillAmount = $totalAmount - $payments['deductions'];
+                    $netBillAmount = $totalAmount;
                     $paidAmount = $payments['paid'];
                     $remainingAmount = max(0, $netBillAmount - $paidAmount);
                     
