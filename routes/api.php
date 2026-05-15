@@ -357,8 +357,6 @@ Route::middleware('auth:sanctum')->group(function () {
     // ==================== SUPPLIER DETAILED REPORT ====================
     Route::get('/supplier-detailed-report/{supplierCode}', [SupplierController::class, 'getDetailedReport']);
 
-   
-
     // Debtor Routes
     Route::post('/debtors/create-with-customer', [DebtorController::class, 'createDebtorWithCustomer']);
     Route::prefix('debtors')->group(function () {
@@ -383,4 +381,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/debtor-creditor/creditor/{code}', [DebtorCreditorController::class, 'getCreditorDetails']);
     Route::get('/debtor-creditor/debtors', [DebtorCreditorController::class, 'getDebtorReport']);
     Route::get('/debtor-creditor/creditors', [DebtorCreditorController::class, 'getCreditorReport']);
+    // Add this inside the authenticated routes group
+    Route::get('/sales/archived', [SalesEntryController::class, 'getArchivedSales']);
 });
