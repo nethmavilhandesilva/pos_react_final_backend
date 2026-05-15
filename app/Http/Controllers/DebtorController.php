@@ -181,64 +181,85 @@ public function createDebt(Request $request)
 }
 
     // Update payment for debtor (when customer pays using cash/cheque/bank_transfer)
-    public function updateDebtorPayment(Request $request)
-    {
-        $request->validate([
-            'bill_no' => 'required|string',
-            'payment_amount' => 'required|numeric|min:0',
-            'payment_method' => 'required|string|in:cash,cheque,bank_transfer'
-        ]);
+  public function updateDebtorPayment(Request $request)
+{
+    $request->validate([
+        'bill_no' => 'required|string',
+        'payment_amount' => 'required|numeric|min:0',
+        'payment_method' => 'nullable|string'  // Accept any string, no restrictions
+    ]);
 
-        try {
-            DB::beginTransaction();
+    try {
+        DB::beginTransaction();
 
-            $debtor = Debtor::where('bill_no', $request->bill_no)->first();
-            
-            if (!$debtor) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Debtor record not found for this bill'
-                ], 404);
-            }
-
-            // Update paid amount and remaining amount
-            $debtor->paid_amount += $request->payment_amount;
-            $debtor->remaining_amount -= $request->payment_amount;
-            $debtor->settled_way = $request->payment_method;
-            
-            // Update status
-            if ($debtor->remaining_amount <= 0) {
-                $debtor->status = 'paid';
-                $debtor->remaining_amount = 0;
-            } elseif ($debtor->paid_amount > 0) {
-                $debtor->status = 'partial';
-            }
-            
-            $debtor->save();
-
-            \Log::info('Debtor payment updated', [
-                'bill_no' => $request->bill_no,
-                'payment_amount' => $request->payment_amount,
-                'payment_method' => $request->payment_method,
-                'remaining_amount' => $debtor->remaining_amount,
-                'status' => $debtor->status
-            ]);
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Debtor payment updated successfully',
-                'data' => $debtor
-            ]);
-        } catch (\Exception $e) {
-            DB::rollBack();
+        $debtor = Debtor::where('bill_no', $request->bill_no)->first();
+        
+        if (!$debtor) {
             return response()->json([
                 'success' => false,
-                'message' => $e->getMessage()
-            ], 500);
+                'message' => 'Debtor record not found for this bill'
+            ], 404);
         }
+
+        // Calculate new amounts
+        $newPaidAmount = $debtor->paid_amount + $request->payment_amount;
+        $newRemainingAmount = $debtor->credit_amount - $newPaidAmount;
+        
+        // Update debtor record
+        $debtor->paid_amount = $newPaidAmount;
+        $debtor->remaining_amount = max(0, $newRemainingAmount);
+        
+        // Store the payment method (any string is accepted)
+        if ($request->has('payment_method') && !empty($request->payment_method)) {
+            $debtor->settled_way = $request->payment_method;
+        }
+        
+        // Update status based on remaining amount
+        if ($debtor->remaining_amount <= 0) {
+            $debtor->status = 'paid';
+            $debtor->remaining_amount = 0;
+        } elseif ($debtor->paid_amount > 0 && $debtor->paid_amount < $debtor->credit_amount) {
+            $debtor->status = 'partial';
+        } else {
+            $debtor->status = 'pending';
+        }
+        
+        $debtor->save();
+
+        \Log::info('Debtor payment updated', [
+            'bill_no' => $request->bill_no,
+            'payment_amount' => $request->payment_amount,
+            'payment_method' => $request->payment_method ?? 'Not specified',
+            'new_paid_amount' => $debtor->paid_amount,
+            'new_remaining_amount' => $debtor->remaining_amount,
+            'status' => $debtor->status
+        ]);
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Debtor payment updated successfully',
+            'data' => [
+                'id' => $debtor->id,
+                'bill_no' => $debtor->bill_no,
+                'customer_code' => $debtor->customer_code,
+                'credit_amount' => $debtor->credit_amount,
+                'paid_amount' => $debtor->paid_amount,
+                'remaining_amount' => $debtor->remaining_amount,
+                'status' => $debtor->status,
+                'settled_way' => $debtor->settled_way
+            ]
+        ]);
+    } catch (\Exception $e) {
+        DB::rollBack();
+        \Log::error('Debtor payment update failed: ' . $e->getMessage());
+        return response()->json([
+            'success' => false,
+            'message' => $e->getMessage()
+        ], 500);
     }
+}
 
     // Get debtor by bill number
     public function getDebtor($billNo)

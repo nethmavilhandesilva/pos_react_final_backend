@@ -3,11 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Models\Customer;
-use App\Models\Debtor;
 use App\Models\Sale;
+use App\Models\SalesHistory;
 use App\Models\Creditor;
 use App\Models\Supplier;
 use App\Models\SupplierLoan;
+use App\Models\Debtor; // Add this import
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -27,61 +28,59 @@ class DebtorCreditorController extends Controller
 
     /**
      * Centralized payment calculator to ensure consistency
+     * This now also checks the debtors table for payments
      */
-  private function calculatePaymentTotals($paymentHistory)
-{
-    $history = $this->parseHistory($paymentHistory);
-
-    Log::info('Payment History Raw', [
-        'history' => $history
-    ]);
-
-    $actualPaid = 0;
-    $creditDeductions = 0;
-
-    foreach ($history as $payment) {
-
-        $method = strtolower(trim($payment['method'] ?? ''));
-        $amount = floatval($payment['amount'] ?? 0);
-
-        Log::info('Processing Payment', [
-            'method_original' => $payment['method'] ?? null,
-            'method_cleaned' => $method,
-            'amount' => $amount,
-            'payment' => $payment
-        ]);
-
-        if ($method === 'credit') {
-
-            $creditDeductions += $amount;
-
-            Log::warning('CREDIT PAYMENT DETECTED', [
-                'deduction_added' => $amount,
-                'total_credit_deductions' => $creditDeductions
-            ]);
-
-        } else {
-
-            $actualPaid += $amount;
-
-            Log::info('NORMAL PAYMENT DETECTED', [
-                'paid_added' => $amount,
-                'total_actual_paid' => $actualPaid
-            ]);
+    private function calculatePaymentTotals($paymentHistory, $billNo = null, $customerCode = null)
+    {
+        $history = $this->parseHistory($paymentHistory);
+        
+        $actualPaid = 0;
+        $creditDeductions = 0;
+        
+        // Get payments from payment_history
+        foreach ($history as $payment) {
+            $method = strtolower(trim($payment['method'] ?? ''));
+            $amount = floatval($payment['amount'] ?? 0);
+            
+            if ($method === 'credit') {
+                $creditDeductions += $amount;
+            } else {
+                $actualPaid += $amount;
+            }
         }
+        
+        // Also check the debtors table for additional payments
+        if ($billNo && $customerCode) {
+            $debtorRecord = Debtor::where('bill_no', $billNo)
+                ->where('customer_code', $customerCode)
+                ->first();
+                
+            if ($debtorRecord && $debtorRecord->paid_amount > 0) {
+                // Don't add if already counted, just ensure we have the correct amount
+                // The debtor table might have the total paid amount
+                if ($actualPaid == 0 && $debtorRecord->paid_amount > 0) {
+                    $actualPaid = $debtorRecord->paid_amount;
+                }
+            }
+        }
+        
+        return [
+            'paid' => $actualPaid,
+            'deductions' => $creditDeductions
+        ];
     }
 
-    Log::info('FINAL PAYMENT TOTALS', [
-        'paid' => $actualPaid,
-        'deductions' => $creditDeductions
-    ]);
+    /**
+     * Get the appropriate model based on view_old_bills parameter
+     */
+    private function getSaleModel($viewOldBills = false)
+    {
+        return $viewOldBills ? SalesHistory::class : Sale::class;
+    }
 
-    return [
-        'paid' => $actualPaid,
-        'deductions' => $creditDeductions
-    ];
-}
-
+    /**
+     * Get combined report for both debtors and creditors
+     */
     public function getCombinedReport(Request $request)
     {
         try {
@@ -110,317 +109,552 @@ class DebtorCreditorController extends Controller
         }
     }
 
+    /**
+     * Get debtor report - FIXED DOUBLE COUNTING
+     */
     public function getDebtorReport(Request $request)
-{
-    try {
-        $search = $request->query('search');
-        $limit = $request->query('limit', 50);
+    {
+        try {
+            $search = $request->query('search');
+            $limit = $request->query('limit', 50);
+            $viewOldBills = filter_var($request->query('view_old_bills', false), FILTER_VALIDATE_BOOLEAN);
 
-        $customerIds = Customer::where('Debtor', 'Y')->pluck('short_name')
-            ->merge(
-                Debtor::whereNotNull('customer_code')
-                    ->distinct()
-                    ->pluck('customer_code')
-            )
-            ->unique()
-            ->values();
+            // Get all customer codes that are debtors
+            $customerIds = Customer::where('Debtor', 'Y')->pluck('short_name')
+                ->unique()
+                ->values();
 
-        $debtorsQuery = Customer::whereIn('short_name', $customerIds);
+            $debtorsQuery = Customer::whereIn('short_name', $customerIds);
 
-        if ($search) {
-            $debtorsQuery->where(function ($q) use ($search) {
-                $q->where('short_name', 'LIKE', "%{$search}%")
-                    ->orWhere('name', 'LIKE', "%{$search}%")
-                    ->orWhere('telephone_no', 'LIKE', "%{$search}%");
-            });
-        }
-
-        $debtors = $debtorsQuery->take($limit)->get();
-
-        $allSales = Sale::whereIn('customer_code', $debtors->pluck('short_name'))
-            ->where('bill_printed', 'Y')
-            ->select(
-                'customer_code',
-                'bill_no',
-                'payment_history',
-                DB::raw('SUM(total + COALESCE(packs, 0) * COALESCE(CustomerPackCost, 0)) as bill_total')
-            )
-            ->groupBy('customer_code', 'bill_no', 'payment_history')
-            ->get()
-            ->groupBy('customer_code');
-
-        $allLegacy = Debtor::whereIn(
-            'customer_code',
-            $debtors->pluck('short_name')
-        )
-            ->get()
-            ->groupBy('customer_code');
-
-        $debtorData = [];
-
-        $summary = [
-            'sales' => 0,
-            'paid' => 0,
-            'rem' => 0,
-            'credit_deductions' => 0
-        ];
-
-        foreach ($debtors as $customer) {
-
-            $netSales = 0;
-            $actualPaid = 0;
-            $creditDeduction = 0;
-            $billCount = 0;
-
-            if (isset($allSales[$customer->short_name])) {
-
-                foreach ($allSales[$customer->short_name] as $bill) {
-
-                    $p = $this->calculatePaymentTotals($bill->payment_history);
-
-                    $creditDeduction += $p['deductions'];
-
-                    $netSales += (
-                        floatval($bill->bill_total) - $p['deductions']
-                    );
-
-                    $actualPaid += $p['paid'];
-
-                    $billCount++;
-                }
+            if ($search) {
+                $debtorsQuery->where(function ($q) use ($search) {
+                    $q->where('short_name', 'LIKE', "%{$search}%")
+                        ->orWhere('name', 'LIKE', "%{$search}%")
+                        ->orWhere('telephone_no', 'LIKE', "%{$search}%")
+                        ->orWhere('Debtor_no', 'LIKE', "%{$search}%");
+                });
             }
 
-            if (isset($allLegacy[$customer->short_name])) {
+            $debtors = $debtorsQuery->take($limit)->get();
 
-                foreach ($allLegacy[$customer->short_name] as $record) {
+            // Get the appropriate model based on view_old_bills
+            $saleModel = $this->getSaleModel($viewOldBills);
+            
+            // Get all sales/bills for these customers
+            $allSales = $saleModel::whereIn('customer_code', $debtors->pluck('short_name'))
+                ->where('bill_printed', 'Y')
+                ->get()
+                ->groupBy('customer_code');
 
-                    $netSales += floatval($record->credit_amount);
-
-                    $actualPaid += floatval($record->paid_amount);
-
-                    $billCount++;
-                }
-            }
-
-            $rem = max(0, $netSales - $actualPaid);
-
-            $debtorData[] = [
-                'debtor_no' => $customer->Debtor_no,
-                'code' => $customer->short_name,
-                'name' => $customer->name,
-                'telephone' => $customer->telephone_no,
-                'address' => $customer->address,
-                'total_sales' => $netSales,
-                'total_paid' => $actualPaid,
-                'credit_deductions' => $creditDeduction,
-                'total_remaining' => $rem,
-                'bill_count' => $billCount,
-                'status' => $rem <= 0 ? 'Fully Paid' : 'Pending'
+            $debtorData = [];
+            $summary = [
+                'sales' => 0,
+                'paid' => 0,
+                'rem' => 0,
+                'credit_deductions' => 0
             ];
 
-            $summary['sales'] += $netSales;
+            foreach ($debtors as $customer) {
+                $netSales = 0;
+                $actualPaid = 0;
+                $creditDeduction = 0;
+                $billCount = 0;
+                
+                // Process bills grouped by bill_no to avoid double counting
+                $processedBills = [];
 
-            // only real payments
-            $summary['paid'] += $actualPaid;
+                // Process current sales/bills
+                if (isset($allSales[$customer->short_name])) {
+                    foreach ($allSales[$customer->short_name] as $bill) {
+                        $billNo = $bill->bill_no;
+                        
+                        // Skip if we've already processed this bill number
+                        if (isset($processedBills[$billNo])) {
+                            continue;
+                        }
+                        
+                        // Calculate bill total
+                        $billTotal = floatval($bill->total);
+                        if (isset($bill->packs) && $bill->packs > 0 && isset($bill->CustomerPackCost)) {
+                            $billTotal += floatval($bill->packs) * floatval($bill->CustomerPackCost);
+                        }
+                        
+                        // Calculate payment totals for this bill - pass billNo and customer code
+                        $payments = $this->calculatePaymentTotals(
+                            $bill->payment_history, 
+                            $billNo, 
+                            $customer->short_name
+                        );
+                        
+                        $creditDeduction += $payments['deductions'];
+                        $netBillAmount = $billTotal - $payments['deductions'];
+                        $netSales += $netBillAmount;
+                        $actualPaid += $payments['paid'];
+                        $billCount++;
+                        
+                        $processedBills[$billNo] = true;
+                    }
+                }
 
-            // track credit separately
-            $summary['credit_deductions'] += $creditDeduction;
+                $remaining = max(0, $netSales - $actualPaid);
 
-            $summary['rem'] += $rem;
+                $debtorData[] = [
+                    'debtor_no' => $customer->Debtor_no,
+                    'code' => $customer->short_name,
+                    'name' => $customer->name,
+                    'telephone' => $customer->telephone_no,
+                    'address' => $customer->address,
+                    'total_sales' => $netSales,
+                    'total_paid' => $actualPaid,
+                    'credit_deductions' => $creditDeduction,
+                    'total_remaining' => $remaining,
+                    'bill_count' => $billCount,
+                    'status' => $remaining <= 0 ? 'Fully Paid' : 'Pending'
+                ];
+
+                $summary['sales'] += $netSales;
+                $summary['paid'] += $actualPaid;
+                $summary['credit_deductions'] += $creditDeduction;
+                $summary['rem'] += $remaining;
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $debtorData,
+                'summary' => [
+                    'total_debtors' => count($debtorData),
+                    'total_sales_amount' => $summary['sales'],
+                    'total_paid_amount' => $summary['paid'],
+                    'total_credit_deductions' => $summary['credit_deductions'],
+                    'total_remaining_amount' => $summary['rem']
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Debtor report error: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
         }
-
-        return response()->json([
-            'success' => true,
-            'data' => $debtorData,
-            'summary' => [
-                'total_debtors' => count($debtorData),
-
-                'total_sales_amount' => $summary['sales'],
-
-                // REAL payments only
-                'total_paid_amount' => $summary['paid'],
-
-                // CREDIT deductions total
-                'total_credit_deductions' => $summary['credit_deductions'],
-
-                'total_remaining_amount' => $summary['rem']
-            ]
-        ]);
-
-    } catch (\Exception $e) {
-
-        return response()->json([
-            'success' => false,
-            'error' => $e->getMessage()
-        ], 500);
     }
-}
 
+    /**
+     * Get detailed debtor information - FIXED DOUBLE COUNTING
+     */
+    public function getDebtorDetails(Request $request, $code)
+    {
+        try {
+            $viewOldBills = filter_var($request->query('view_old_bills', false), FILTER_VALIDATE_BOOLEAN);
+            
+            $customer = Customer::where('short_name', $code)->first();
+            if (!$customer) {
+                return response()->json(['success' => false, 'message' => 'Customer not found'], 404);
+            }
+
+            // Get the appropriate model based on view_old_bills
+            $saleModel = $this->getSaleModel($viewOldBills);
+            
+            // Get all bills for this customer
+            $bills = $saleModel::where('customer_code', $code)
+                ->where('bill_printed', 'Y')
+                ->get()
+                ->groupBy('bill_no')
+                ->map(function ($billGroup, $billNo) use ($code) {
+                    $firstBill = $billGroup->first();
+                    
+                    // Calculate total amount for this bill
+                    $totalAmount = 0;
+                    foreach ($billGroup as $bill) {
+                        $billTotal = floatval($bill->total);
+                        if (isset($bill->packs) && $bill->packs > 0 && isset($bill->CustomerPackCost)) {
+                            $billTotal += floatval($bill->packs) * floatval($bill->CustomerPackCost);
+                        }
+                        $totalAmount += $billTotal;
+                    }
+                    
+                    // Calculate payment totals - pass billNo and customer code
+                    $payments = $this->calculatePaymentTotals(
+                        $firstBill->payment_history, 
+                        $billNo, 
+                        $code
+                    );
+                    
+                    $netBillAmount = $totalAmount - $payments['deductions'];
+                    $paidAmount = $payments['paid'];
+                    $remainingAmount = max(0, $netBillAmount - $paidAmount);
+                    
+                    return [
+                        'bill_no' => $billNo,
+                        'created_at' => $firstBill->created_at,
+                        'total_amount' => $netBillAmount,
+                        'paid_amount' => $paidAmount,
+                        'remaining_amount' => $remainingAmount,
+                        'credit_deductions' => $payments['deductions']
+                    ];
+                })
+                ->values()
+                ->sortByDesc('created_at')
+                ->values();
+
+            // Collect all payments
+            $payments = [];
+            
+            // Get payments from sales/bills only
+            $salesRecords = $saleModel::where('customer_code', $code)
+                ->whereNotNull('payment_history')
+                ->get();
+                
+            foreach ($salesRecords as $sale) {
+                $paymentHistory = $this->parseHistory($sale->payment_history);
+                foreach ($paymentHistory as $payment) {
+                    // Skip credit payments as they're deductions
+                    if (strtolower(trim($payment['method'] ?? '')) === 'credit') {
+                        continue;
+                    }
+                    
+                    $payments[] = array_merge($payment, [
+                        'bill_no' => $sale->bill_no,
+                        'method_display' => $this->getPaymentMethodDisplay($payment['method'] ?? 'Cash'),
+                        'date' => $payment['date'] ?? $sale->created_at
+                    ]);
+                }
+            }
+
+            // Calculate totals
+            $totalBillAmount = $bills->sum('total_amount');
+            $totalPaidAmount = $bills->sum('paid_amount');
+            $totalCreditDeductions = $bills->sum('credit_deductions');
+            
+            // Apply overpayment logic for display
+            $displayPaidAmount = $totalPaidAmount;
+            if ($totalPaidAmount > $totalBillAmount) {
+                $displayPaidAmount = $totalPaidAmount - $totalCreditDeductions;
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'code' => $customer->short_name,
+                    'debtor_no' => $customer->Debtor_no,
+                    'name' => $customer->name,
+                    'telephone' => $customer->telephone_no,
+                    'address' => $customer->address,
+                    'credit_limit' => $customer->credit_limit ?? 0,
+                    'profile_pic' => $customer->profile_pic ?? null,
+                    'bills' => $bills,
+                    'payments' => $payments,
+                    'total_bill_amount' => $totalBillAmount,
+                    'total_paid_amount' => $displayPaidAmount,
+                    'total_credit_deductions' => $totalCreditDeductions,
+                    'total_remaining' => $bills->sum('remaining_amount')
+                ]
+            ]);
+            
+        } catch (\Exception $e) {
+            Log::error('Debtor details error: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    // Rest of your controller methods (getCreditorReport, getCreditorDetails, etc.) remain the same
+    // ... (keep all the other methods unchanged)
+
+    /**
+     * Get payment method display text
+     */
+    private function getPaymentMethodDisplay($method)
+    {
+        $methods = [
+            'Cash' => 'Cash',
+            'Cheque' => 'Cheque',
+            'Bank Transfer' => 'Bank Transfer',
+            'credit' => 'Credit',
+            'bag_to_box' => 'Bag to Box',
+            'bill_to_bill' => 'Bill to Bill',
+            'bad_debt' => 'Bad Debt'
+        ];
+        
+        return $methods[$method] ?? ucfirst($method);
+    }
+
+    /**
+     * Get creditor report - NO LEGACY RECORDS
+     */
     public function getCreditorReport(Request $request)
     {
         try {
             $search = $request->query('search');
             $limit = $request->query('limit', 50);
+            $viewOldBills = filter_var($request->query('view_old_bills', false), FILTER_VALIDATE_BOOLEAN);
 
+            // Get all supplier codes that are creditors
             $supplierIds = Supplier::where('Creditor', 'Y')->pluck('code')
-                ->merge(Creditor::whereNotNull('supplier_code')->distinct()->pluck('supplier_code'))
-                ->unique()->values();
+                ->unique()
+                ->values();
 
-            $creditors = Supplier::whereIn('code', $supplierIds)
-                ->when($search, fn($q) => $q->where('code', 'LIKE', "%$search%")->orWhere('name', 'LIKE', "%$search%"))
-                ->take($limit)->get();
+            $creditorsQuery = Supplier::whereIn('code', $supplierIds);
 
-            $allBills = Sale::whereIn('supplier_code', $creditors->pluck('code'))
+            if ($search) {
+                $creditorsQuery->where(function ($q) use ($search) {
+                    $q->where('code', 'LIKE', "%{$search}%")
+                        ->orWhere('name', 'LIKE', "%{$search}%");
+                });
+            }
+
+            $creditors = $creditorsQuery->take($limit)->get();
+
+            // Get the appropriate model based on view_old_bills
+            $saleModel = $this->getSaleModel($viewOldBills);
+            
+            // Get all supplier bills - NO LEGACY
+            $allBills = $saleModel::whereIn('supplier_code', $creditors->pluck('code'))
                 ->where('supplier_bill_printed', 'Y')
-                ->select('supplier_code', 'supplier_bill_no', DB::raw('SUM(SupplierTotal) as total'), DB::raw('SUM(COALESCE(supplier_paid_amount, 0)) as paid'))
-                ->groupBy('supplier_code', 'supplier_bill_no')->get()->groupBy('supplier_code');
-
-            $allLegacy = Creditor::whereIn('supplier_code', $creditors->pluck('code'))->get()->groupBy('supplier_code');
-            $allLoans = SupplierLoan::whereIn('code', $creditors->pluck('code'))->get()->groupBy('code');
+                ->get()
+                ->groupBy('supplier_code');
+            
+            // Get supplier loans
+            $allLoans = SupplierLoan::whereIn('code', $creditors->pluck('code'))
+                ->get()
+                ->groupBy('code');
 
             $creditorData = [];
-            $gt = ['sup' => 0, 'paid' => 0, 'rem' => 0];
+            $summary = [
+                'supplier_amount' => 0,
+                'paid' => 0,
+                'rem' => 0
+            ];
 
             foreach ($creditors as $supplier) {
-                $sTotal = 0; $sPaid = 0; $count = 0;
+                $totalAmount = 0;
+                $totalPaid = 0;
+                $billCount = 0;
+                
+                // Process bills grouped by bill_no to avoid double counting
+                $processedBills = [];
 
+                // Process current supplier bills only - NO LEGACY
                 if (isset($allBills[$supplier->code])) {
-                    $sTotal += $allBills[$supplier->code]->sum('total');
-                    $sPaid += $allBills[$supplier->code]->sum('paid');
-                    $count += $allBills[$supplier->code]->count();
+                    foreach ($allBills[$supplier->code] as $bill) {
+                        $billNo = $bill->supplier_bill_no;
+                        
+                        // Skip if we've already processed this bill number
+                        if (isset($processedBills[$billNo])) {
+                            continue;
+                        }
+                        
+                        $totalAmount += floatval($bill->SupplierTotal);
+                        $totalPaid += floatval($bill->supplier_paid_amount);
+                        $billCount++;
+                        
+                        $processedBills[$billNo] = true;
+                    }
                 }
 
-                if (isset($allLegacy[$supplier->code])) {
-                    $sTotal += $allLegacy[$supplier->code]->sum('credit_amount');
-                    $sPaid += $allLegacy[$supplier->code]->sum('paid_amount');
-                    $count += $allLegacy[$supplier->code]->count();
-                }
-
+                // Process loans
                 if (isset($allLoans[$supplier->code])) {
                     foreach ($allLoans[$supplier->code] as $loan) {
-                        $lp = $this->calculatePaymentTotals($loan->payment_details);
-                        $sTotal += (floatval($loan->loan_amount) - $lp['deductions']);
-                        $sPaid += $lp['paid'];
-                        $count++;
+                        $paymentTotals = $this->calculatePaymentTotals($loan->payment_details);
+                        $netLoanAmount = floatval($loan->loan_amount) - $paymentTotals['deductions'];
+                        $totalAmount += $netLoanAmount;
+                        $totalPaid += $paymentTotals['paid'];
+                        $billCount++;
                     }
                 }
 
-                $rem = max(0, $sTotal - $sPaid);
+                $remaining = max(0, $totalAmount - $totalPaid);
+                
                 $creditorData[] = [
-                    'code' => $supplier->code, 'name' => $supplier->name, 'total_supplier_amount' => $sTotal,
-                    'total_paid' => $sPaid, 'total_remaining' => $rem, 'bill_count' => $count,
-                    'status' => $rem <= 0 ? 'Fully Settled' : 'Pending'
+                    'code' => $supplier->code,
+                    'name' => $supplier->name,
+                    'total_supplier_amount' => $totalAmount,
+                    'total_paid' => $totalPaid,
+                    'total_remaining' => $remaining,
+                    'bill_count' => $billCount,
+                    'status' => $remaining <= 0 ? 'Fully Settled' : 'Pending'
                 ];
-                $gt['sup'] += $sTotal; $gt['paid'] += $sPaid; $gt['rem'] += $rem;
+                
+                $summary['supplier_amount'] += $totalAmount;
+                $summary['paid'] += $totalPaid;
+                $summary['rem'] += $remaining;
             }
 
-            return response()->json(['success' => true, 'data' => $creditorData, 'summary' => [
-                'total_creditors' => count($creditorData), 'total_supplier_amount' => $gt['sup'],
-                'total_paid_amount' => $gt['paid'], 'total_remaining_amount' => $gt['rem']
-            ]]);
+            return response()->json([
+                'success' => true,
+                'data' => $creditorData,
+                'summary' => [
+                    'total_creditors' => count($creditorData),
+                    'total_supplier_amount' => $summary['supplier_amount'],
+                    'total_paid_amount' => $summary['paid'],
+                    'total_remaining_amount' => $summary['rem']
+                ]
+            ]);
         } catch (\Exception $e) {
-            return response()->json(['success' => false, 'error' => $e->getMessage()], 500);
+            Log::error('Creditor report error: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
         }
     }
 
-    public function getDebtorDetails($code)
+    /**
+     * Get detailed debtor information - NO LEGACY RECORDS
+     */
+  
+
+    /**
+     * Get detailed creditor information - NO LEGACY RECORDS
+     */
+    public function getCreditorDetails(Request $request, $code)
     {
         try {
-            $customer = Customer::where('short_name', $code)->first();
-            if (!$customer) return response()->json(['success' => false], 404);
-
-            $bills = Sale::where('customer_code', $code)
-                ->where('bill_printed', 'Y')
-                ->select('bill_no', 'payment_history', 'created_at', DB::raw('SUM(total + COALESCE(packs, 0) * COALESCE(CustomerPackCost, 0)) as total_amount'))
-                ->groupBy('bill_no', 'payment_history', 'created_at')
-                ->orderBy('created_at', 'desc')->get()
-                ->map(function ($bill) {
-                    $p = $this->calculatePaymentTotals($bill->payment_history);
-                    $netBill = floatval($bill->total_amount) ;
-                    return [
-                        'bill_no' => $bill->bill_no, 'created_at' => $bill->created_at, 'total_amount' => $netBill,
-                        'paid_amount' => $p['paid'], 'remaining_amount' => max(0, $netBill - $p['paid'])
-                    ];
-                });
-
-            $payments = [];
-            $salesRecords = Sale::where('customer_code', $code)->whereNotNull('payment_history')->get();
-            foreach ($salesRecords as $sale) {
-                foreach ($this->parseHistory($sale->payment_history) as $p) {
-                    if (strtolower($p['method'] ?? '') !== 'credit') {
-                        $payments[] = array_merge($p, ['bill_no' => $sale->bill_no, 'method_display' => $this->getPaymentMethodDisplay($p['method'] ?? 'Cash')]);
-                    }
-                }
-            }
-
-            return response()->json(['success' => true, 'data' => [
-                'code' => $customer->short_name, 'name' => $customer->name, 'bills' => $bills, 'payments' => $payments,
-                'total_bill_amount' => $bills->sum('total_amount'), 'total_paid_amount' => $bills->sum('paid_amount'),
-                'total_remaining' => $bills->sum('remaining_amount')
-            ]]);
-        } catch (\Exception $e) {
-            return response()->json(['success' => false, 'error' => $e->getMessage()], 500);
-        }
-    }
-
-    public function getCreditorDetails($code)
-    {
-        try {
+            $viewOldBills = filter_var($request->query('view_old_bills', false), FILTER_VALIDATE_BOOLEAN);
+            
             $supplier = Supplier::where('code', $code)->first();
-            if (!$supplier) return response()->json(['success' => false, 'message' => 'Supplier not found'], 404);
+            if (!$supplier) {
+                return response()->json(['success' => false, 'message' => 'Supplier not found'], 404);
+            }
 
-            $bills = Sale::where('supplier_code', $code)->where('supplier_bill_printed', 'Y')
-                ->select('supplier_bill_no', 'created_at', 'SupplierTotal as total_amount', 'supplier_paid_amount as paid_amount')
-                ->orderBy('created_at', 'desc')->get()
-                ->map(fn($b) => [
-                    'bill_no' => $b->supplier_bill_no, 'created_at' => $b->created_at, 'total_amount' => floatval($b->total_amount),
-                    'paid_amount' => floatval($b->paid_amount), 'remaining_amount' => max(0, floatval($b->total_amount) - floatval($b->paid_amount)),
-                    'type' => 'Sale Bill', 'is_fully_settled' => (floatval($b->total_amount) - floatval($b->paid_amount)) <= 0
-                ]);
-
-            $loans = SupplierLoan::where('code', $code)->orderBy('Date', 'desc')->get()
-                ->map(function($l) {
-                    $p = $this->calculatePaymentTotals($l->payment_details);
-                    $net = floatval($l->loan_amount) - $p['deductions'];
+            // Get the appropriate model based on view_old_bills
+            $saleModel = $this->getSaleModel($viewOldBills);
+            
+            // Get all supplier bills - NO LEGACY
+            $bills = $saleModel::where('supplier_code', $code)
+                ->where('supplier_bill_printed', 'Y')
+                ->get()
+                ->groupBy('supplier_bill_no')
+                ->map(function ($billGroup, $billNo) {
+                    $firstBill = $billGroup->first();
+                    $totalAmount = $billGroup->sum('SupplierTotal');
+                    $paidAmount = $billGroup->sum('supplier_paid_amount');
+                    
                     return [
-                        'bill_no' => $l->bill_no, 'loan_amount' => floatval($l->loan_amount), 'net_amount' => $net,
-                        'paid_amount' => $p['paid'], 'remaining_amount' => max(0, $net - $p['paid']), 'date' => $l->Date,
-                        'type' => $l->type, 'is_fully_settled' => ($net - $p['paid']) <= 0
+                        'bill_no' => $billNo,
+                        'created_at' => $firstBill->created_at,
+                        'total_amount' => floatval($totalAmount),
+                        'paid_amount' => floatval($paidAmount),
+                        'remaining_amount' => max(0, floatval($totalAmount) - floatval($paidAmount)),
+                        'type' => 'Sale Bill',
+                        'is_fully_settled' => (floatval($totalAmount) - floatval($paidAmount)) <= 0
+                    ];
+                })
+                ->values()
+                ->sortByDesc('created_at')
+                ->values();
+
+            // Get supplier loans
+            $loans = SupplierLoan::where('code', $code)
+                ->orderBy('Date', 'desc')
+                ->get()
+                ->map(function($loan) {
+                    $paymentTotals = $this->calculatePaymentTotals($loan->payment_details);
+                    $netLoanAmount = floatval($loan->loan_amount) - $paymentTotals['deductions'];
+                    $paidAmount = $paymentTotals['paid'];
+                    $remainingAmount = max(0, $netLoanAmount - $paidAmount);
+                    
+                    return [
+                        'bill_no' => $loan->bill_no,
+                        'loan_amount' => floatval($loan->loan_amount),
+                        'net_amount' => $netLoanAmount,
+                        'paid_amount' => $paidAmount,
+                        'remaining_amount' => $remainingAmount,
+                        'date' => $loan->Date,
+                        'type' => $loan->type,
+                        'is_fully_settled' => $remainingAmount <= 0
                     ];
                 });
 
-            return response()->json(['success' => true, 'data' => [
-                'code' => $supplier->code, 'name' => $supplier->name, 'bills' => $bills, 'loans' => $loans,
-                'payments' => $this->getCreditorPaymentHistory($code),
-                'total_amount' => $bills->sum('total_amount') + $loans->sum('net_amount'),
-                'total_paid' => $bills->sum('paid_amount') + $loans->sum('paid_amount'),
-                'total_remaining' => $bills->sum('remaining_amount') + $loans->sum('remaining_amount')
-            ]]);
+            // Collect all payments - NO LEGACY
+            $payments = $this->getCreditorPaymentHistory($code, $viewOldBills);
+
+            // Calculate totals
+            $totalAmount = $bills->sum('total_amount') + $loans->sum('net_amount');
+            $totalPaid = $bills->sum('paid_amount') + $loans->sum('paid_amount');
+            $totalRemaining = $bills->sum('remaining_amount') + $loans->sum('remaining_amount');
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'code' => $supplier->code,
+                    'name' => $supplier->name,
+                    'bills' => $bills,
+                    'loans' => $loans,
+                    'payments' => $payments,
+                    'total_amount' => $totalAmount,
+                    'total_paid' => $totalPaid,
+                    'total_remaining' => $totalRemaining
+                ]
+            ]);
+            
         } catch (\Exception $e) {
-            return response()->json(['success' => false, 'error' => $e->getMessage()], 500);
+            Log::error('Creditor details error: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
         }
     }
 
-    private function getCreditorPaymentHistory($supplierCode)
+    /**
+     * Get creditor payment history - NO LEGACY
+     */
+    private function getCreditorPaymentHistory($supplierCode, $viewOldBills = false)
     {
         $payments = [];
-        $sales = Sale::where('supplier_code', $supplierCode)->whereNotNull('payment_history')->get();
+        
+        // Get the appropriate model
+        $saleModel = $this->getSaleModel($viewOldBills);
+        
+        // Get payments from supplier bills only - NO LEGACY
+        $sales = $saleModel::where('supplier_code', $supplierCode)
+            ->whereNotNull('payment_history')
+            ->get();
+            
         foreach ($sales as $sale) {
-            foreach ($this->parseHistory($sale->payment_history) as $p) {
-                if (strtolower($p['method'] ?? '') !== 'credit') {
-                    $payments[] = [
-                        'bill_no' => $sale->supplier_bill_no ?? $sale->bill_no, 'amount' => $p['amount'] ?? 0,
-                        'method_display' => $this->getPaymentMethodDisplay($p['method'] ?? 'Cash'), 'date' => $p['date'] ?? $sale->created_at
-                    ];
-                }
+            $paymentHistory = $this->parseHistory($sale->payment_history);
+            foreach ($paymentHistory as $payment) {
+                $payments[] = [
+                    'bill_no' => $sale->supplier_bill_no ?? $sale->bill_no,
+                    'amount' => $payment['amount'] ?? 0,
+                    'method_display' => $this->getPaymentMethodDisplay($payment['method'] ?? 'Cash'),
+                    'date' => $payment['date'] ?? $sale->created_at,
+                    'method' => $payment['method'] ?? 'Cash'
+                ];
             }
         }
+
+        // Get payments from loans
+        $loans = SupplierLoan::where('code', $supplierCode)
+            ->whereNotNull('payment_details')
+            ->get();
+            
+        foreach ($loans as $loan) {
+            $paymentHistory = $this->parseHistory($loan->payment_details);
+            foreach ($paymentHistory as $payment) {
+                $payments[] = [
+                    'bill_no' => $loan->bill_no,
+                    'amount' => $payment['amount'] ?? 0,
+                    'method_display' => $this->getPaymentMethodDisplay($payment['method'] ?? 'Cash'),
+                    'date' => $payment['date'] ?? $loan->Date,
+                    'method' => $payment['method'] ?? 'Cash'
+                ];
+            }
+        }
+
+        // Sort payments by date (newest first)
+        usort($payments, function($a, $b) {
+            return strtotime($b['date']) - strtotime($a['date']);
+        });
+
         return $payments;
     }
 
-    private function getPaymentMethodDisplay($method)
-    {
-        $methods = ['Cash' => 'Cash', 'Cheque' => 'Cheque', 'Bank Transfer' => 'Bank Transfer', 'credit' => 'Credit'];
-        return $methods[$method] ?? ucfirst($method);
-    }
+    /**
+     * Get payment method display text
+     */
+  
 }
