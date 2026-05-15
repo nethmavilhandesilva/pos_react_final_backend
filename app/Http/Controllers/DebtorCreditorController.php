@@ -30,45 +30,47 @@ class DebtorCreditorController extends Controller
      * Centralized payment calculator to ensure consistency
      * This now also checks the debtors table for payments
      */
-    private function calculatePaymentTotals($paymentHistory, $billNo = null, $customerCode = null)
-    {
-        $history = $this->parseHistory($paymentHistory);
+   private function calculatePaymentTotals($paymentHistory, $billNo = null, $customerCode = null)
+{
+    $history = $this->parseHistory($paymentHistory);
+    
+    $actualPaid = 0;
+    $creditDeductions = 0;
+    $creditAmount = 0;  // Add this
+    
+    // Get payments from payment_history
+    foreach ($history as $payment) {
+        $method = strtolower(trim($payment['method'] ?? ''));
+        $amount = floatval($payment['amount'] ?? 0);
         
-        $actualPaid = 0;
-        $creditDeductions = 0;
-        
-        // Get payments from payment_history
-        foreach ($history as $payment) {
-            $method = strtolower(trim($payment['method'] ?? ''));
-            $amount = floatval($payment['amount'] ?? 0);
-            
-            if ($method === 'credit') {
-                $creditDeductions += $amount;
-            } else {
-                $actualPaid += $amount;
-            }
+        if ($method === 'credit') {
+            $creditAmount += $amount;  // Track credit amounts
+            $creditDeductions += $amount;
+        } else {
+            $actualPaid += $amount;
         }
-        
-        // Also check the debtors table for additional payments
-        if ($billNo && $customerCode) {
-            $debtorRecord = Debtor::where('bill_no', $billNo)
-                ->where('customer_code', $customerCode)
-                ->first();
-                
-            if ($debtorRecord && $debtorRecord->paid_amount > 0) {
-                // Don't add if already counted, just ensure we have the correct amount
-                // The debtor table might have the total paid amount
-                if ($actualPaid == 0 && $debtorRecord->paid_amount > 0) {
-                    $actualPaid = $debtorRecord->paid_amount;
-                }
-            }
-        }
-        
-        return [
-            'paid' => $actualPaid,
-            'deductions' => $creditDeductions
-        ];
     }
+    
+    // Also check the debtors table for additional payments
+    if ($billNo && $customerCode) {
+        $debtorRecord = Debtor::where('bill_no', $billNo)
+            ->where('customer_code', $customerCode)
+            ->first();
+            
+        if ($debtorRecord && $debtorRecord->paid_amount > 0) {
+            // Don't add if already counted, just ensure we have the correct amount
+            if ($actualPaid == 0 && $debtorRecord->paid_amount > 0) {
+                $actualPaid = $debtorRecord->paid_amount;
+            }
+        }
+    }
+    
+    return [
+        'paid' => $actualPaid,
+        'deductions' => $creditDeductions,
+        'credit_amount' => $creditAmount  // Return credit amount
+    ];
+}
 
     /**
      * Get the appropriate model based on view_old_bills parameter
@@ -112,133 +114,145 @@ class DebtorCreditorController extends Controller
     /**
      * Get debtor report - FIXED DOUBLE COUNTING
      */
-    public function getDebtorReport(Request $request)
-    {
-        try {
-            $search = $request->query('search');
-            $limit = $request->query('limit', 50);
-            $viewOldBills = filter_var($request->query('view_old_bills', false), FILTER_VALIDATE_BOOLEAN);
+   public function getDebtorReport(Request $request)
+{
+    try {
+        $search = $request->query('search');
+        $limit = $request->query('limit', 50);
+        $viewOldBills = filter_var($request->query('view_old_bills', false), FILTER_VALIDATE_BOOLEAN);
 
-            // Get all customer codes that are debtors
-            $customerIds = Customer::where('Debtor', 'Y')->pluck('short_name')
-                ->unique()
-                ->values();
+        // Get all customer codes that are debtors
+        $customerIds = Customer::where('Debtor', 'Y')->pluck('short_name')
+            ->unique()
+            ->values();
 
-            $debtorsQuery = Customer::whereIn('short_name', $customerIds);
+        $debtorsQuery = Customer::whereIn('short_name', $customerIds);
 
-            if ($search) {
-                $debtorsQuery->where(function ($q) use ($search) {
-                    $q->where('short_name', 'LIKE', "%{$search}%")
-                        ->orWhere('name', 'LIKE', "%{$search}%")
-                        ->orWhere('telephone_no', 'LIKE', "%{$search}%")
-                        ->orWhere('Debtor_no', 'LIKE', "%{$search}%");
-                });
+        if ($search) {
+            $debtorsQuery->where(function ($q) use ($search) {
+                $q->where('short_name', 'LIKE', "%{$search}%")
+                    ->orWhere('name', 'LIKE', "%{$search}%")
+                    ->orWhere('telephone_no', 'LIKE', "%{$search}%")
+                    ->orWhere('Debtor_no', 'LIKE', "%{$search}%");
+            });
+        }
+
+        $debtors = $debtorsQuery->take($limit)->get();
+
+        // Get the appropriate model based on view_old_bills
+        $saleModel = $this->getSaleModel($viewOldBills);
+        
+        // Get all sales/bills for these customers
+        $allSales = $saleModel::whereIn('customer_code', $debtors->pluck('short_name'))
+            ->where('bill_printed', 'Y')
+            ->get()
+            ->groupBy('customer_code');
+
+        $debtorData = [];
+        $summary = [
+            'sales' => 0,
+            'paid' => 0,
+            'rem' => 0,
+            'credit_deductions' => 0,
+            'credit_amounts' => 0  // Add this to track total credits
+        ];
+
+        foreach ($debtors as $customer) {
+            $netSales = 0;
+            $actualPaid = 0;
+            $creditDeduction = 0;
+            $totalCreditAmount = 0;  // Track total credit for this customer
+            $billCount = 0;
+            
+            // Process bills grouped by bill_no to avoid double counting
+            $processedBills = [];
+
+            // Process current sales/bills
+            if (isset($allSales[$customer->short_name])) {
+                foreach ($allSales[$customer->short_name] as $bill) {
+                    $billNo = $bill->bill_no;
+                    
+                    // Skip if we've already processed this bill number
+                    if (isset($processedBills[$billNo])) {
+                        continue;
+                    }
+                    
+                    // Calculate bill total
+                    $billTotal = floatval($bill->total);
+                    if (isset($bill->packs) && $bill->packs > 0 && isset($bill->CustomerPackCost)) {
+                        $billTotal += floatval($bill->packs) * floatval($bill->CustomerPackCost);
+                    }
+                    
+                    // Calculate payment totals for this bill - pass billNo and customer code
+                    $payments = $this->calculatePaymentTotals(
+                        $bill->payment_history, 
+                        $billNo, 
+                        $customer->short_name
+                    );
+                    
+                    // Get credit amount from payment history
+                    $creditAmountFromHistory = $payments['credit_amount'] ?? 0;
+                    
+                    $creditDeduction += $payments['deductions'];
+                    $totalCreditAmount += $creditAmountFromHistory;
+                    
+                    // ✅ CRITICAL FIX: Add credit amount to bill total for sales amount
+                    $billTotalWithCredit = $billTotal + $creditAmountFromHistory;
+                    $netBillAmount = $billTotalWithCredit - $payments['deductions'];
+                    
+                    $netSales += $netBillAmount;
+                    $actualPaid += $payments['paid'];
+                    $billCount++;
+                    
+                    $processedBills[$billNo] = true;
+                }
             }
 
-            $debtors = $debtorsQuery->take($limit)->get();
+            $remaining = max(0, $netSales - $actualPaid);
 
-            // Get the appropriate model based on view_old_bills
-            $saleModel = $this->getSaleModel($viewOldBills);
-            
-            // Get all sales/bills for these customers
-            $allSales = $saleModel::whereIn('customer_code', $debtors->pluck('short_name'))
-                ->where('bill_printed', 'Y')
-                ->get()
-                ->groupBy('customer_code');
-
-            $debtorData = [];
-            $summary = [
-                'sales' => 0,
-                'paid' => 0,
-                'rem' => 0,
-                'credit_deductions' => 0
+            $debtorData[] = [
+                'debtor_no' => $customer->Debtor_no,
+                'code' => $customer->short_name,
+                'name' => $customer->name,
+                'telephone' => $customer->telephone_no,
+                'address' => $customer->address,
+                'total_sales' => $netSales,  // Now includes credit amounts
+                'total_paid' => $actualPaid,
+                'credit_deductions' => $creditDeduction,
+                'total_credit_amount' => $totalCreditAmount,
+                'total_remaining' => $remaining,
+                'bill_count' => $billCount,
+                'status' => $remaining <= 0 ? 'Fully Paid' : 'Pending'
             ];
 
-            foreach ($debtors as $customer) {
-                $netSales = 0;
-                $actualPaid = 0;
-                $creditDeduction = 0;
-                $billCount = 0;
-                
-                // Process bills grouped by bill_no to avoid double counting
-                $processedBills = [];
-
-                // Process current sales/bills
-                if (isset($allSales[$customer->short_name])) {
-                    foreach ($allSales[$customer->short_name] as $bill) {
-                        $billNo = $bill->bill_no;
-                        
-                        // Skip if we've already processed this bill number
-                        if (isset($processedBills[$billNo])) {
-                            continue;
-                        }
-                        
-                        // Calculate bill total
-                        $billTotal = floatval($bill->total);
-                        if (isset($bill->packs) && $bill->packs > 0 && isset($bill->CustomerPackCost)) {
-                            $billTotal += floatval($bill->packs) * floatval($bill->CustomerPackCost);
-                        }
-                        
-                        // Calculate payment totals for this bill - pass billNo and customer code
-                        $payments = $this->calculatePaymentTotals(
-                            $bill->payment_history, 
-                            $billNo, 
-                            $customer->short_name
-                        );
-                        
-                        $creditDeduction += $payments['deductions'];
-                        $netBillAmount = $billTotal - $payments['deductions'];
-                        $netSales += $netBillAmount;
-                        $actualPaid += $payments['paid'];
-                        $billCount++;
-                        
-                        $processedBills[$billNo] = true;
-                    }
-                }
-
-                $remaining = max(0, $netSales - $actualPaid);
-
-                $debtorData[] = [
-                    'debtor_no' => $customer->Debtor_no,
-                    'code' => $customer->short_name,
-                    'name' => $customer->name,
-                    'telephone' => $customer->telephone_no,
-                    'address' => $customer->address,
-                    'total_sales' => $netSales,
-                    'total_paid' => $actualPaid,
-                    'credit_deductions' => $creditDeduction,
-                    'total_remaining' => $remaining,
-                    'bill_count' => $billCount,
-                    'status' => $remaining <= 0 ? 'Fully Paid' : 'Pending'
-                ];
-
-                $summary['sales'] += $netSales;
-                $summary['paid'] += $actualPaid;
-                $summary['credit_deductions'] += $creditDeduction;
-                $summary['rem'] += $remaining;
-            }
-
-            return response()->json([
-                'success' => true,
-                'data' => $debtorData,
-                'summary' => [
-                    'total_debtors' => count($debtorData),
-                    'total_sales_amount' => $summary['sales'],
-                    'total_paid_amount' => $summary['paid'],
-                    'total_credit_deductions' => $summary['credit_deductions'],
-                    'total_remaining_amount' => $summary['rem']
-                ]
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('Debtor report error: ' . $e->getMessage());
-            return response()->json([
-                'success' => false,
-                'error' => $e->getMessage()
-            ], 500);
+            $summary['sales'] += $netSales;
+            $summary['paid'] += $actualPaid;
+            $summary['credit_deductions'] += $creditDeduction;
+            $summary['credit_amounts'] += $totalCreditAmount;
+            $summary['rem'] += $remaining;
         }
-    }
 
+        return response()->json([
+            'success' => true,
+            'data' => $debtorData,
+            'summary' => [
+                'total_debtors' => count($debtorData),
+                'total_sales_amount' => $summary['sales'],
+                'total_paid_amount' => $summary['paid'],
+                'total_credit_deductions' => $summary['credit_deductions'],
+                'total_credit_amounts' => $summary['credit_amounts'],
+                'total_remaining_amount' => $summary['rem']
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        Log::error('Debtor report error: ' . $e->getMessage());
+        return response()->json([
+            'success' => false,
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
     /**
      * Get detailed debtor information - FIXED DOUBLE COUNTING
      */
