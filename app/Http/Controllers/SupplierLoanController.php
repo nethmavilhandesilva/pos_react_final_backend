@@ -85,12 +85,12 @@ class SupplierLoanController extends Controller
 
             // ==================== FETCH CREDITOR NO FROM CREDITORS TABLE ====================
             $creditorNo = null;
-            
+
             // Try to find existing creditor record
             $creditorRecord = Creditor::where('bill_no', $validated['bill_no'])
                 ->where('supplier_code', $validated['code'])
                 ->first();
-            
+
             if ($creditorRecord && $creditorRecord->Creditor_no) {
                 // Use existing creditor number from creditors table
                 $creditorNo = $creditorRecord->Creditor_no;
@@ -287,12 +287,12 @@ class SupplierLoanController extends Controller
 
             // Try to fetch creditor number from creditors table for target bill
             $targetCreditorNo = $creditorNo;
-            
+
             if (!$targetCreditorNo) {
                 $creditorRecord = Creditor::where('bill_no', $supplierBillNo)
                     ->where('supplier_code', $supplierCode)
                     ->first();
-                
+
                 if ($creditorRecord && $creditorRecord->Creditor_no) {
                     $targetCreditorNo = $creditorRecord->Creditor_no;
                     Log::info('Found creditor number from creditors table for target bill', [
@@ -302,7 +302,7 @@ class SupplierLoanController extends Controller
                     ]);
                 }
             }
-            
+
             // Find the supplier loan record for the target bill
             $targetLoan = SupplierLoan::where('code', $supplierCode)
                 ->where('bill_no', $supplierBillNo)
@@ -1187,6 +1187,35 @@ class SupplierLoanController extends Controller
                 'printed' => [],
                 'unprinted' => []
             ]);
+        }
+    }
+    /**
+     * Get suppliers by first letter of code (only those with Creditor = 'Y')
+     */
+    public function getSuppliersByLetter(Request $request): JsonResponse
+    {
+        try {
+            $letter = $request->query('letter', '');
+
+            $query = Supplier::where('Creditor', 'Y')
+                ->select('code', 'Creditor_no', 'name');
+
+            if (!empty($letter)) {
+                $query->where('code', 'LIKE', $letter . '%');
+            }
+
+            $suppliers = $query->orderBy('code', 'asc')->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $suppliers
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error fetching suppliers by letter: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch suppliers'
+            ], 500);
         }
     }
 }

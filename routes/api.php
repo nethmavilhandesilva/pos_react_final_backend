@@ -110,6 +110,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/suppliers/full-report', [SupplierLoanController::class, 'getFarmerFullReport']);
     Route::get('/suppliers/bill-status-summary', [SupplierController::class, 'getSupplierBillStatusSummary']);
     Route::get('/suppliers/supplierloans', [SupplierLoanController::class, 'getSupplierLoansSummary']);
+    
+    // ✅ CRITICAL: This route MUST come BEFORE any wildcard routes like /suppliers/{supplierCode}
+    Route::get('/suppliers/by-letter', [SupplierLoanController::class, 'getSuppliersByLetter']);
+    
     Route::get('/suppliers/{supplierCode}/details', [SupplierController::class, 'getSupplierDetails']);
     Route::post('/suppliers/delete-loan-record', [SupplierLoanController::class, 'deleteLoanRecord']);
     Route::get('/suppliers/bill/{billNo}/details', [SupplierLoanController::class, 'getSupplierBillDetails']);
@@ -381,6 +385,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/debtor-creditor/creditor/{code}', [DebtorCreditorController::class, 'getCreditorDetails']);
     Route::get('/debtor-creditor/debtors', [DebtorCreditorController::class, 'getDebtorReport']);
     Route::get('/debtor-creditor/creditors', [DebtorCreditorController::class, 'getCreditorReport']);
+    
     // Add this inside the authenticated routes group
     Route::get('/sales/archived', [SalesEntryController::class, 'getArchivedSales']);
 });

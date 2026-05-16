@@ -31,14 +31,14 @@ class SupplierController extends Controller
 public function store(Request $request)
 {
     $data = $request->validate([
-        'code' => 'required|unique:suppliers',
+        'code' => 'required|string', // Removed unique validation
         'name' => 'required|string',
         'dob' => 'required|date',
         'address' => 'required|string',
         'telephone_no' => 'required|string|max:20',
         'advance_amount' => 'nullable|numeric',
-        'bill_no' => 'nullable|string',  // Add this
-        'credit_amount' => 'nullable|numeric',  // Add this
+        'bill_no' => 'nullable|string',
+        'credit_amount' => 'nullable|numeric',
         'profile_pic' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
         'nic_front' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
         'nic_back' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
@@ -58,10 +58,14 @@ public function store(Request $request)
 
     $data['code'] = strtoupper($data['code']);
     $data['Creditor'] = 'Y';
-    
-    // Generate creditor number
-    $data['Creditor_no'] = CreditorNumberHelper::generateCreditorNumber();
-    
+
+    // Generate unique creditor number
+    do {
+        $creditorNo = CreditorNumberHelper::generateCreditorNumber();
+    } while (Supplier::where('Creditor_no', $creditorNo)->exists());
+
+    $data['Creditor_no'] = $creditorNo;
+
     \Log::info('Creating new supplier with creditor no', [
         'supplier_code' => $data['code'],
         'creditor_no' => $data['Creditor_no']
@@ -70,18 +74,21 @@ public function store(Request $request)
     $supplier = Supplier::create($data);
 
     // Create creditor record if bill_no is provided
-    if ($request->has('bill_no') && $request->bill_no) {
+    if ($request->filled('bill_no')) {
+
+        $creditAmount = $request->credit_amount ?? 0;
+
         $creditor = Creditor::create([
             'bill_no' => $request->bill_no,
             'supplier_code' => $supplier->code,
-            'credit_amount' => $request->credit_amount ?? 0,
+            'credit_amount' => $creditAmount,
             'paid_amount' => 0,
-            'remaining_amount' => $request->credit_amount ?? 0,
+            'remaining_amount' => $creditAmount,
             'status' => 'pending',
             'settled_way' => Creditor::SETTLED_WAY_REGISTRATION,
             'Creditor_no' => $supplier->Creditor_no
         ]);
-        
+
         \Log::info('Creditor record created for new supplier', [
             'creditor_id' => $creditor->id,
             'creditor_no' => $creditor->Creditor_no,
