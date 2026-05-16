@@ -83,6 +83,30 @@ class SupplierLoanController extends Controller
                 ->where('bill_no', $validated['bill_no'])
                 ->first();
 
+            // ==================== FETCH CREDITOR NO FROM CREDITORS TABLE ====================
+            $creditorNo = null;
+            
+            // Try to find existing creditor record
+            $creditorRecord = Creditor::where('bill_no', $validated['bill_no'])
+                ->where('supplier_code', $validated['code'])
+                ->first();
+            
+            if ($creditorRecord && $creditorRecord->Creditor_no) {
+                // Use existing creditor number from creditors table
+                $creditorNo = $creditorRecord->Creditor_no;
+                Log::info('Found existing creditor number from creditors table', [
+                    'creditor_no' => $creditorNo,
+                    'bill_no' => $validated['bill_no'],
+                    'supplier_code' => $validated['code']
+                ]);
+            } elseif ($existingLoan && $existingLoan->Creditor_no) {
+                // Fallback: use existing loan's creditor number
+                $creditorNo = $existingLoan->Creditor_no;
+                Log::info('Using creditor number from existing loan', [
+                    'creditor_no' => $creditorNo
+                ]);
+            }
+
             // Calculate new totals
             $currentPaidAmount = $existingLoan ? ($existingLoan->loan_amount ?? 0) : 0;
             $newPaidAmount = $currentPaidAmount + $validated['loan_amount'];
@@ -93,7 +117,8 @@ class SupplierLoanController extends Controller
                 'new_payment' => $validated['loan_amount'],
                 'new_total_paid' => $newPaidAmount,
                 'total_payable' => $totalPayable,
-                'new_remaining' => $newRemainingAmount
+                'new_remaining' => $newRemainingAmount,
+                'creditor_no' => $creditorNo
             ]);
 
             // Merge payment details
@@ -117,6 +142,7 @@ class SupplierLoanController extends Controller
                 'Date' => $settingDate,
                 'payment_type' => $validated['type'] ?? 'Cash',
                 'payment_details' => $mergedPaymentDetails,
+                'Creditor_no' => $creditorNo, // Add creditor number (may be null)
             ];
 
             // Handle payment type and specific fields
@@ -186,9 +212,32 @@ class SupplierLoanController extends Controller
                 $loanData
             );
 
-            Log::info('Loan record saved', ['id' => $loan->id, 'remaining' => $loan->total_amount]);
+            Log::info('Loan record saved', ['id' => $loan->id, 'remaining' => $loan->total_amount, 'creditor_no' => $creditorNo]);
 
-            // Update sales records
+            // ==================== UPDATE SALES TABLE WITH CREDITOR_NO ====================
+            // Update all matching sales records with the creditor number from creditors table
+            if ($creditorNo) {
+                $updatedSalesCount = Sale::where('supplier_code', $validated['code'])
+                    ->where('supplier_bill_no', $validated['bill_no'])
+                    ->update([
+                        'Creditor_no' => $creditorNo,
+                        'updated_at' => now()
+                    ]);
+
+                Log::info('Updated sales records with Creditor_no from creditors table', [
+                    'creditor_no' => $creditorNo,
+                    'supplier_code' => $validated['code'],
+                    'bill_no' => $validated['bill_no'],
+                    'records_updated' => $updatedSalesCount
+                ]);
+            } else {
+                Log::warning('No creditor number found to update sales table', [
+                    'supplier_code' => $validated['code'],
+                    'bill_no' => $validated['bill_no']
+                ]);
+            }
+
+            // Update sales records (loan taken flag)
             $this->updateSalesRecords($validated);
 
             // If this is a bill_to_bill payment, update the target supplier bill
@@ -197,7 +246,8 @@ class SupplierLoanController extends Controller
                     $this->updateTargetSupplierBillPayment(
                         $validated['target_supplier_code'],
                         $validated['target_supplier_bill_no'],
-                        $validated['target_supplier_bill_value'] ?? 0
+                        $validated['target_supplier_bill_value'] ?? 0,
+                        $creditorNo // Pass the creditor number to also update target sales
                     );
                 }
             }
@@ -207,7 +257,8 @@ class SupplierLoanController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Payment saved successfully.',
-                'data' => $loan
+                'data' => $loan,
+                'creditor_no' => $creditorNo
             ], 200);
 
         } catch (\Exception $e) {
@@ -221,20 +272,52 @@ class SupplierLoanController extends Controller
         }
     }
 
-    // Add this new method to update target supplier bill payment
-    protected function updateTargetSupplierBillPayment($supplierCode, $supplierBillNo, $paymentAmount)
+    /**
+     * Update target supplier bill payment
+     */
+    protected function updateTargetSupplierBillPayment($supplierCode, $supplierBillNo, $paymentAmount, $creditorNo = null)
     {
         try {
             Log::info('Updating target supplier bill payment', [
                 'supplier_code' => $supplierCode,
                 'supplier_bill_no' => $supplierBillNo,
-                'payment_amount' => $paymentAmount
+                'payment_amount' => $paymentAmount,
+                'creditor_no' => $creditorNo
             ]);
 
+            // Try to fetch creditor number from creditors table for target bill
+            $targetCreditorNo = $creditorNo;
+            
+            if (!$targetCreditorNo) {
+                $creditorRecord = Creditor::where('bill_no', $supplierBillNo)
+                    ->where('supplier_code', $supplierCode)
+                    ->first();
+                
+                if ($creditorRecord && $creditorRecord->Creditor_no) {
+                    $targetCreditorNo = $creditorRecord->Creditor_no;
+                    Log::info('Found creditor number from creditors table for target bill', [
+                        'creditor_no' => $targetCreditorNo,
+                        'bill_no' => $supplierBillNo,
+                        'supplier_code' => $supplierCode
+                    ]);
+                }
+            }
+            
             // Find the supplier loan record for the target bill
             $targetLoan = SupplierLoan::where('code', $supplierCode)
                 ->where('bill_no', $supplierBillNo)
                 ->first();
+
+            // If target loan exists but has no creditor number, update it
+            if ($targetLoan && !$targetLoan->Creditor_no && $targetCreditorNo) {
+                $targetLoan->Creditor_no = $targetCreditorNo;
+                $targetLoan->save();
+                Log::info('Updated target loan with creditor number', [
+                    'supplier_code' => $supplierCode,
+                    'bill_no' => $supplierBillNo,
+                    'creditor_no' => $targetCreditorNo
+                ]);
+            }
 
             if ($targetLoan) {
                 // Get the total payable amount for this bill from sales records
@@ -253,6 +336,7 @@ class SupplierLoanController extends Controller
                 Log::info('Updated target supplier loan record', [
                     'supplier_code' => $supplierCode,
                     'bill_no' => $supplierBillNo,
+                    'creditor_no' => $targetCreditorNo,
                     'old_paid' => ($targetLoan->loan_amount ?? 0) - $paymentAmount,
                     'new_paid' => $newPaidAmount,
                     'total_payable' => $totalPayable,
@@ -273,38 +357,54 @@ class SupplierLoanController extends Controller
                     'total_amount' => $newRemainingAmount,
                     'Date' => now(),
                     'payment_type' => 'Bill to Bill Transfer',
-                    'type' => 'bill_to_bill'
+                    'type' => 'bill_to_bill',
+                    'Creditor_no' => $targetCreditorNo
                 ]);
 
                 Log::info('Created new supplier loan record for target bill', [
                     'supplier_code' => $supplierCode,
                     'bill_no' => $supplierBillNo,
+                    'creditor_no' => $targetCreditorNo,
                     'loan_id' => $newLoan->id,
                     'paid_amount' => $paymentAmount,
                     'remaining' => $newRemainingAmount
                 ]);
             }
 
-            // Update the sales records for this supplier bill
-            $updatedCount = Sale::where('supplier_code', $supplierCode)
-                ->where('supplier_bill_no', $supplierBillNo)
-                ->update([
-                    'supplier_paid_amount' => DB::raw('COALESCE(supplier_paid_amount, 0) + ' . floatval($paymentAmount)),
-                    'supplier_paid_status' => 'Y',
-                    'updated_at' => now()
+            // Update the sales records for this supplier bill with Creditor_no
+            if ($targetCreditorNo) {
+                $updatedCount = Sale::where('supplier_code', $supplierCode)
+                    ->where('supplier_bill_no', $supplierBillNo)
+                    ->update([
+                        'supplier_paid_amount' => DB::raw('COALESCE(supplier_paid_amount, 0) + ' . floatval($paymentAmount)),
+                        'supplier_paid_status' => 'Y',
+                        'Creditor_no' => $targetCreditorNo, // Update creditor number in sales table
+                        'updated_at' => now()
+                    ]);
+
+                Log::info('Updated target supplier sales records with creditor number', [
+                    'supplier_code' => $supplierCode,
+                    'bill_no' => $supplierBillNo,
+                    'creditor_no' => $targetCreditorNo,
+                    'payment_amount' => $paymentAmount,
+                    'records_updated' => $updatedCount
                 ]);
+            } else {
+                // Still update payment but without creditor number
+                $updatedCount = Sale::where('supplier_code', $supplierCode)
+                    ->where('supplier_bill_no', $supplierBillNo)
+                    ->update([
+                        'supplier_paid_amount' => DB::raw('COALESCE(supplier_paid_amount, 0) + ' . floatval($paymentAmount)),
+                        'supplier_paid_status' => 'Y',
+                        'updated_at' => now()
+                    ]);
 
-            Log::info('Updated target supplier sales records', [
-                'supplier_code' => $supplierCode,
-                'bill_no' => $supplierBillNo,
-                'payment_amount' => $paymentAmount,
-                'records_updated' => $updatedCount
-            ]);
-
-            // Also update the main bill's payment details to include this transfer
-            // This helps track that this payment was a bill-to-bill transfer
-            if (!empty($supplierBillNo)) {
-                // You can add additional logic here if needed
+                Log::info('Updated target supplier sales records (without creditor number)', [
+                    'supplier_code' => $supplierCode,
+                    'bill_no' => $supplierBillNo,
+                    'payment_amount' => $paymentAmount,
+                    'records_updated' => $updatedCount
+                ]);
             }
 
         } catch (\Exception $e) {
@@ -516,69 +616,67 @@ class SupplierLoanController extends Controller
     /**
      * Delete loan record
      */
-public function deleteLoanRecord(Request $request): JsonResponse
-{
-    $validated = $request->validate([
-        'code' => 'required|string',
-        'bill_no' => 'nullable|string',
-    ]);
+    public function deleteLoanRecord(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'code' => 'required|string',
+            'bill_no' => 'nullable|string',
+        ]);
 
-    DB::beginTransaction();
+        DB::beginTransaction();
 
-    try {
+        try {
 
-        // Find supplier loan record
-        $loanRecord = SupplierLoan::where('code', $validated['code'])
-            ->where('bill_no', $validated['bill_no'])
-            ->first();
+            // Find supplier loan record
+            $loanRecord = SupplierLoan::where('code', $validated['code'])
+                ->where('bill_no', $validated['bill_no'])
+                ->first();
 
-        if (!$loanRecord) {
+            if (!$loanRecord) {
+                DB::rollback();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Loan record not found.'
+                ], 404);
+            }
 
-            DB::rollback();
+            // Find matching creditor record
+            $creditor = Creditor::where('bill_no', trim($loanRecord->bill_no))
+                ->where('supplier_code', trim($validated['code']))
+                ->first();
+
+            // Permanently delete creditor record if exists
+            if ($creditor) {
+                $creditor->forceDelete();
+            }
+
+            // Permanently delete supplier loan record
+            $loanRecord->forceDelete();
+
+            // Clear Creditor_no from sales table
+            Sale::where('supplier_code', $validated['code'])
+                ->where('supplier_bill_no', $validated['bill_no'])
+                ->update([
+                    'loan_taken' => null,
+                    'Creditor_no' => null
+                ]);
+
+            DB::commit();
 
             return response()->json([
+                'success' => true,
+                'message' => 'Loan and creditor records permanently deleted successfully.'
+            ], 200);
+
+        } catch (\Exception $e) {
+            DB::rollback();
+            return response()->json([
                 'success' => false,
-                'message' => 'Loan record not found.'
-            ], 404);
+                'message' => 'Failed to delete record: ' . $e->getMessage()
+            ], 500);
         }
-
-        // Find matching creditor record
-        $creditor = Creditor::where('bill_no', trim($loanRecord->bill_no))
-            ->where('supplier_code', trim($validated['code']))
-            ->first();
-
-        // Permanently delete creditor record if exists
-        if ($creditor) {
-            $creditor->forceDelete();
-        }
-
-        // Permanently delete supplier loan record
-        $loanRecord->forceDelete();
-
-        // Update sales table
-        Sale::where('supplier_code', $validated['code'])
-            ->where('supplier_bill_no', $validated['bill_no'])
-            ->update([
-                'loan_taken' => null
-            ]);
-
-        DB::commit();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Loan and creditor records permanently deleted successfully.'
-        ], 200);
-
-    } catch (\Exception $e) {
-
-        DB::rollback();
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to delete record: ' . $e->getMessage()
-        ], 500);
     }
-}
+
     /**
      * Get all supplier codes
      */
@@ -617,7 +715,7 @@ public function deleteLoanRecord(Request $request): JsonResponse
     {
         try {
             $loans = DB::table('supplier_loans')
-                ->select('code as supplier_code', 'bill_no as supplier_bill_no', 'loan_amount', 'total_amount', 'type', 'payment_details', 'created_at')
+                ->select('code as supplier_code', 'bill_no as supplier_bill_no', 'loan_amount', 'total_amount', 'type', 'payment_details', 'created_at', 'Creditor_no')
                 ->orderBy('created_at', 'desc')
                 ->get();
 
@@ -660,7 +758,7 @@ public function deleteLoanRecord(Request $request): JsonResponse
                     ];
                 });
 
-            $paidBills = SupplierLoan::select('code as supplier_code', 'bill_no as supplier_bill_no')
+            $paidBills = SupplierLoan::select('code as supplier_code', 'bill_no as supplier_bill_no', 'Creditor_no')
                 ->whereNotNull('bill_no')
                 ->where('total_amount', '<=', 0)
                 ->orderBy('created_at', 'desc')
@@ -668,7 +766,8 @@ public function deleteLoanRecord(Request $request): JsonResponse
                 ->map(function ($item) {
                     return [
                         'supplier_code' => $item->supplier_code,
-                        'supplier_bill_no' => $item->supplier_bill_no
+                        'supplier_bill_no' => $item->supplier_bill_no,
+                        'creditor_no' => $item->Creditor_no
                     ];
                 });
 
@@ -719,7 +818,8 @@ public function deleteLoanRecord(Request $request): JsonResponse
                     'total_paid' => floatval($loan->loan_amount),
                     'remaining_balance' => floatval($loan->total_amount),
                     'payments' => $paymentDetails,
-                    'payment_methods' => $loan->type
+                    'payment_methods' => $loan->type,
+                    'creditor_no' => $loan->Creditor_no
                 ]
             ]);
         } catch (\Exception $e) {
@@ -730,6 +830,10 @@ public function deleteLoanRecord(Request $request): JsonResponse
             ], 500);
         }
     }
+
+    /**
+     * Get payment collection report
+     */
     public function getPaymentCollectionReport(Request $request): JsonResponse
     {
         try {
@@ -785,7 +889,8 @@ public function deleteLoanRecord(Request $request): JsonResponse
                         'total_paid' => 0,
                         'date' => $loan->Date,
                         'payment_methods' => [],
-                        'payment_details' => []
+                        'payment_details' => [],
+                        'creditor_no' => $loan->Creditor_no
                     ];
                 }
 
@@ -933,6 +1038,7 @@ public function deleteLoanRecord(Request $request): JsonResponse
             ], 500);
         }
     }
+
     /**
      * Get supplier bill details for a specific bill
      */
@@ -990,14 +1096,13 @@ public function deleteLoanRecord(Request $request): JsonResponse
             Log::error('Error fetching unprinted details: ' . $e->getMessage());
             return response()->json([
                 'success' => false
-                
             ], 500);
         }
     }
+
     /**
      * Get supplier bill status summary (for left and right panels)
      */
-
     public function getSupplierLoansSummary(): JsonResponse
     {
         try {
@@ -1017,7 +1122,7 @@ public function deleteLoanRecord(Request $request): JsonResponse
                 });
 
             // Get ALL loans (not just active ones)
-            $allLoans = SupplierLoan::select('code', 'bill_no', 'loan_amount', 'total_amount')
+            $allLoans = SupplierLoan::select('code', 'bill_no', 'loan_amount', 'total_amount', 'Creditor_no')
                 ->get()
                 ->keyBy(function ($item) {
                     return $item->code . '-' . $item->bill_no;
@@ -1038,13 +1143,15 @@ public function deleteLoanRecord(Request $request): JsonResponse
                             'supplier_code' => $bill['supplier_code'],
                             'supplier_bill_no' => $bill['supplier_bill_no'],
                             'loan_amount' => $allLoans[$key]->loan_amount,
-                            'total_amount' => $remainingAmount
+                            'total_amount' => $remainingAmount,
+                            'creditor_no' => $allLoans[$key]->Creditor_no
                         ];
                     } else {
                         // Fully paid - FULLY SETTLED
                         $completedBills[] = [
                             'supplier_code' => $bill['supplier_code'],
-                            'supplier_bill_no' => $bill['supplier_bill_no']
+                            'supplier_bill_no' => $bill['supplier_bill_no'],
+                            'creditor_no' => $allLoans[$key]->Creditor_no
                         ];
                     }
                 } else {
@@ -1060,12 +1167,11 @@ public function deleteLoanRecord(Request $request): JsonResponse
                         'supplier_code' => $bill['supplier_code'],
                         'supplier_bill_no' => $bill['supplier_bill_no'],
                         'loan_amount' => 0,
-                        'total_amount' => floatval($totalPayable)
+                        'total_amount' => floatval($totalPayable),
+                        'creditor_no' => null
                     ];
                 }
             }
-
-          
 
             // IMPORTANT: 
             // 'printed' = FULLY SETTLED (complete)

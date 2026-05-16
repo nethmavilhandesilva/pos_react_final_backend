@@ -40,7 +40,8 @@ class SupplierLoan extends Model
         'target_supplier_bill_value',
         'bad_debt_name',
         'bad_debt_amount',
-        'payment_type'
+        'payment_type',
+        'Creditor_no',
     ];
 
     protected $casts = [
