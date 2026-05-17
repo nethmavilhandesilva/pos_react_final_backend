@@ -253,129 +253,139 @@ class DebtorCreditorController extends Controller
         ], 500);
     }
 }
+
     /**
      * Get detailed debtor information - FIXED DOUBLE COUNTING
+     * UPDATED: Always use Date column from sales table for payment dates
      */
-    public function getDebtorDetails(Request $request, $code)
-    {
-        try {
-            $viewOldBills = filter_var($request->query('view_old_bills', false), FILTER_VALIDATE_BOOLEAN);
-            
-            $customer = Customer::where('short_name', $code)->first();
-            if (!$customer) {
-                return response()->json(['success' => false, 'message' => 'Customer not found'], 404);
-            }
-
-            // Get the appropriate model based on view_old_bills
-            $saleModel = $this->getSaleModel($viewOldBills);
-            
-            // Get all bills for this customer
-            $bills = $saleModel::where('customer_code', $code)
-                ->where('bill_printed', 'Y')
-                ->get()
-                ->groupBy('bill_no')
-                ->map(function ($billGroup, $billNo) use ($code) {
-                    $firstBill = $billGroup->first();
-                    
-                    // Calculate total amount for this bill
-                    $totalAmount = 0;
-                    foreach ($billGroup as $bill) {
-                        $billTotal = floatval($bill->total);
-                        if (isset($bill->packs) && $bill->packs > 0 && isset($bill->CustomerPackCost)) {
-                            $billTotal += floatval($bill->packs) * floatval($bill->CustomerPackCost);
-                        }
-                        $totalAmount += $billTotal;
-                    }
-                    
-                    // Calculate payment totals - pass billNo and customer code
-                    $payments = $this->calculatePaymentTotals(
-                        $firstBill->payment_history, 
-                        $billNo, 
-                        $code
-                    );
-                    
-                    $netBillAmount = $totalAmount;
-                    $paidAmount = $payments['paid'];
-                    $remainingAmount = max(0, $netBillAmount - $paidAmount);
-                    
-                    return [
-                        'bill_no' => $billNo,
-                        'created_at' => $firstBill->created_at,
-                        'total_amount' => $netBillAmount,
-                        'paid_amount' => $paidAmount,
-                        'remaining_amount' => $remainingAmount,
-                        'credit_deductions' => $payments['deductions']
-                    ];
-                })
-                ->values()
-                ->sortByDesc('created_at')
-                ->values();
-
-            // Collect all payments
-            $payments = [];
-            
-            // Get payments from sales/bills only
-            $salesRecords = $saleModel::where('customer_code', $code)
-                ->whereNotNull('payment_history')
-                ->get();
-                
-            foreach ($salesRecords as $sale) {
-                $paymentHistory = $this->parseHistory($sale->payment_history);
-                foreach ($paymentHistory as $payment) {
-                    // Skip credit payments as they're deductions
-                    if (strtolower(trim($payment['method'] ?? '')) === 'credit') {
-                        continue;
-                    }
-                    
-                    $payments[] = array_merge($payment, [
-                        'bill_no' => $sale->bill_no,
-                        'method_display' => $this->getPaymentMethodDisplay($payment['method'] ?? 'Cash'),
-                        'date' => $payment['date'] ?? $sale->created_at
-                    ]);
-                }
-            }
-
-            // Calculate totals
-            $totalBillAmount = $bills->sum('total_amount');
-            $totalPaidAmount = $bills->sum('paid_amount');
-            $totalCreditDeductions = $bills->sum('credit_deductions');
-            
-            // Apply overpayment logic for display
-            $displayPaidAmount = $totalPaidAmount;
-            if ($totalPaidAmount > $totalBillAmount) {
-                $displayPaidAmount = $totalPaidAmount - $totalCreditDeductions;
-            }
-
-            return response()->json([
-                'success' => true,
-                'data' => [
-                    'code' => $customer->short_name,
-                    'debtor_no' => $customer->Debtor_no,
-                    'name' => $customer->name,
-                    'telephone' => $customer->telephone_no,
-                    'address' => $customer->address,
-                    'credit_limit' => $customer->credit_limit ?? 0,
-                    'profile_pic' => $customer->profile_pic ?? null,
-                    'bills' => $bills,
-                    'payments' => $payments,
-                    'total_bill_amount' => $totalBillAmount,
-                    'total_paid_amount' => $displayPaidAmount,
-                    'total_credit_deductions' => $totalCreditDeductions,
-                    'total_remaining' => $bills->sum('remaining_amount')
-                ]
-            ]);
-            
-        } catch (\Exception $e) {
-            Log::error('Debtor details error: ' . $e->getMessage());
-            return response()->json([
-                'success' => false,
-                'error' => $e->getMessage()
-            ], 500);
+ public function getDebtorDetails(Request $request, $code)
+{
+    try {
+        $viewOldBills = filter_var($request->query('view_old_bills', false), FILTER_VALIDATE_BOOLEAN);
+        
+        $customer = Customer::where('short_name', $code)->first();
+        if (!$customer) {
+            return response()->json(['success' => false, 'message' => 'Customer not found'], 404);
         }
-    }
 
-    // Rest of your controller methods (getCreditorReport, getCreditorDetails, etc.) remain the same
-    // ... (keep all the other methods unchanged)
+        // Get the appropriate model based on view_old_bills
+        $saleModel = $this->getSaleModel($viewOldBills);
+        
+        // Get all bills for this customer
+        $bills = $saleModel::where('customer_code', $code)
+            ->where('bill_printed', 'Y')
+            ->get()
+            ->groupBy('bill_no')
+            ->map(function ($billGroup, $billNo) use ($code) {
+                $firstBill = $billGroup->first();
+                
+                // Calculate total amount for this bill
+                $totalAmount = 0;
+                foreach ($billGroup as $bill) {
+                    $billTotal = floatval($bill->total);
+                    if (isset($bill->packs) && $bill->packs > 0 && isset($bill->CustomerPackCost)) {
+                        $billTotal += floatval($bill->packs) * floatval($bill->CustomerPackCost);
+                    }
+                    $totalAmount += $billTotal;
+                }
+                
+                // Calculate payment totals - pass billNo and customer code
+                $payments = $this->calculatePaymentTotals(
+                    $firstBill->payment_history, 
+                    $billNo, 
+                    $code
+                );
+                
+                $netBillAmount = $totalAmount;
+                $paidAmount = $payments['paid'];
+                $remainingAmount = max(0, $netBillAmount - $paidAmount);
+                
+                return [
+                    'bill_no' => $billNo,
+                    'date' => $firstBill->Date ? date('Y-m-d', strtotime($firstBill->Date)) : null,
+                    'total_amount' => $netBillAmount,
+                    'paid_amount' => $paidAmount,
+                    'remaining_amount' => $remainingAmount,
+                    'credit_deductions' => $payments['deductions']
+                ];
+            })
+            ->values()
+            ->filter(function($bill) {
+                return $bill !== null;
+            })
+            ->sortByDesc('date')
+            ->values();
+
+        // Collect all payments - ALWAYS USE SALE'S DATE COLUMN, IGNORE PAYMENT_HISTORY DATE
+        $payments = [];
+        
+        // Get payments from sales/bills only
+        $salesRecords = $saleModel::where('customer_code', $code)
+            ->whereNotNull('payment_history')
+            ->get();
+            
+        foreach ($salesRecords as $sale) {
+            $paymentHistory = $this->parseHistory($sale->payment_history);
+            foreach ($paymentHistory as $payment) {
+                // Skip credit payments as they're deductions
+                if (strtolower(trim($payment['method'] ?? '')) === 'credit') {
+                    continue;
+                }
+                
+                // IMPORTANT: Use the sale's Date column, NOT the payment['date']
+                $payments[] = [
+                    'bill_no' => $sale->bill_no,
+                    'amount' => $payment['amount'] ?? 0,
+                    'method' => $payment['method'] ?? 'Cash',
+                    'method_display' => $this->getPaymentMethodDisplay($payment['method'] ?? 'Cash'),
+                    'date' => $sale->Date ? date('Y-m-d', strtotime($sale->Date)) : null
+                ];
+            }
+        }
+
+        // Sort payments by date (newest first)
+        usort($payments, function($a, $b) {
+            return strtotime($b['date']) - strtotime($a['date']);
+        });
+
+        // Calculate totals
+        $totalBillAmount = $bills->sum('total_amount');
+        $totalPaidAmount = $bills->sum('paid_amount');
+        $totalCreditDeductions = $bills->sum('credit_deductions');
+        
+        // Apply overpayment logic for display
+        $displayPaidAmount = $totalPaidAmount;
+        if ($totalPaidAmount > $totalBillAmount) {
+            $displayPaidAmount = $totalPaidAmount - $totalCreditDeductions;
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'code' => $customer->short_name,
+                'debtor_no' => $customer->Debtor_no,
+                'name' => $customer->name,
+                'telephone' => $customer->telephone_no,
+                'address' => $customer->address,
+                'credit_limit' => $customer->credit_limit ?? 0,
+                'profile_pic' => $customer->profile_pic ?? null,
+                'bills' => $bills,
+                'payments' => $payments,
+                'total_bill_amount' => $totalBillAmount,
+                'total_paid_amount' => $displayPaidAmount,
+                'total_credit_deductions' => $totalCreditDeductions,
+                'total_remaining' => $bills->sum('remaining_amount')
+            ]
+        ]);
+        
+    } catch (\Exception $e) {
+        Log::error('Debtor details error: ' . $e->getMessage());
+        return response()->json([
+            'success' => false,
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
 
     /**
      * Get payment method display text
@@ -516,11 +526,6 @@ class DebtorCreditorController extends Controller
     }
 
     /**
-     * Get detailed debtor information - NO LEGACY RECORDS
-     */
-  
-
-    /**
      * Get detailed creditor information - NO LEGACY RECORDS
      */
     public function getCreditorDetails(Request $request, $code)
@@ -548,7 +553,7 @@ class DebtorCreditorController extends Controller
                     
                     return [
                         'bill_no' => $billNo,
-                        'created_at' => $firstBill->created_at,
+                        'date' => $firstBill->Date,
                         'total_amount' => floatval($totalAmount),
                         'paid_amount' => floatval($paidAmount),
                         'remaining_amount' => max(0, floatval($totalAmount) - floatval($paidAmount)),
@@ -557,7 +562,7 @@ class DebtorCreditorController extends Controller
                     ];
                 })
                 ->values()
-                ->sortByDesc('created_at')
+                ->sortByDesc('date')
                 ->values();
 
             // Get supplier loans
@@ -614,7 +619,7 @@ class DebtorCreditorController extends Controller
     }
 
     /**
-     * Get creditor payment history - NO LEGACY
+     * Get creditor payment history - UPDATED: Always use Date column from sales/loans tables
      */
     private function getCreditorPaymentHistory($supplierCode, $viewOldBills = false)
     {
@@ -623,7 +628,7 @@ class DebtorCreditorController extends Controller
         // Get the appropriate model
         $saleModel = $this->getSaleModel($viewOldBills);
         
-        // Get payments from supplier bills only - NO LEGACY
+        // Get payments from supplier bills only - ALWAYS USE SALE'S DATE COLUMN
         $sales = $saleModel::where('supplier_code', $supplierCode)
             ->whereNotNull('payment_history')
             ->get();
@@ -631,17 +636,18 @@ class DebtorCreditorController extends Controller
         foreach ($sales as $sale) {
             $paymentHistory = $this->parseHistory($sale->payment_history);
             foreach ($paymentHistory as $payment) {
+                // IMPORTANT: Use the sale's Date column, NOT the payment['date']
                 $payments[] = [
                     'bill_no' => $sale->supplier_bill_no ?? $sale->bill_no,
                     'amount' => $payment['amount'] ?? 0,
                     'method_display' => $this->getPaymentMethodDisplay($payment['method'] ?? 'Cash'),
-                    'date' => $payment['date'] ?? $sale->created_at,
+                    'date' => $sale->Date ? date('Y-m-d', strtotime($sale->Date)) : null,
                     'method' => $payment['method'] ?? 'Cash'
                 ];
             }
         }
 
-        // Get payments from loans
+        // Get payments from loans - ALWAYS USE LOAN'S DATE COLUMN
         $loans = SupplierLoan::where('code', $supplierCode)
             ->whereNotNull('payment_details')
             ->get();
@@ -653,7 +659,7 @@ class DebtorCreditorController extends Controller
                     'bill_no' => $loan->bill_no,
                     'amount' => $payment['amount'] ?? 0,
                     'method_display' => $this->getPaymentMethodDisplay($payment['method'] ?? 'Cash'),
-                    'date' => $payment['date'] ?? $loan->Date,
+                    'date' => $loan->Date ? date('Y-m-d', strtotime($loan->Date)) : null,
                     'method' => $payment['method'] ?? 'Cash'
                 ];
             }
@@ -666,9 +672,4 @@ class DebtorCreditorController extends Controller
 
         return $payments;
     }
-
-    /**
-     * Get payment method display text
-     */
-  
 }
