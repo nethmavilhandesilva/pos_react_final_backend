@@ -55,7 +55,8 @@ Route::post('/customers/check-or-create', [CustomerController::class, 'checkOrCr
 
 //validation
 Route::get('/customers/check-short-name/{short_name}', [CustomerController::class, 'checkShortName']);
-
+// Debug endpoint for history table
+Route::get('/supplier-loan/debug-history', [SupplierLoanController::class, 'debugHistory']);
 //bill preview
 Route::get('/public/bill/{token}', [SalesEntryController::class, 'viewPublicBill']);
 
@@ -109,11 +110,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/suppliers/all-codes', [SupplierLoanController::class, 'getAllCodes']);
     Route::get('/suppliers/full-report', [SupplierLoanController::class, 'getFarmerFullReport']);
     Route::get('/suppliers/bill-status-summary', [SupplierController::class, 'getSupplierBillStatusSummary']);
+    
+    // MAIN ROUTE for supplier loans summary - used by the frontend
     Route::get('/suppliers/supplierloans', [SupplierLoanController::class, 'getSupplierLoansSummary']);
     
+    // VIEW OLD BILLS ROUTE - alias that also uses getSupplierLoansSummary with use_history parameter
+    Route::get('/suppliers/old-bills-summary', [SupplierLoanController::class, 'getSupplierLoansSummary']);
+
     // ✅ CRITICAL: This route MUST come BEFORE any wildcard routes like /suppliers/{supplierCode}
     Route::get('/suppliers/by-letter', [SupplierLoanController::class, 'getSuppliersByLetter']);
-    
+
     Route::get('/suppliers/{supplierCode}/details', [SupplierController::class, 'getSupplierDetails']);
     Route::post('/suppliers/delete-loan-record', [SupplierLoanController::class, 'deleteLoanRecord']);
     Route::get('/suppliers/bill/{billNo}/details', [SupplierLoanController::class, 'getSupplierBillDetails']);
@@ -313,8 +319,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/pending-customer-bills', [SupplierLoanController::class, 'getPendingCustomerBills']);
     Route::get('/pending-farmer-bills', [SupplierLoanController::class, 'getPendingFarmerBills']);
 
-    // Supplier Loan Summary Routes (must come AFTER specific routes)
-    Route::get('/suppliers/supplierloans-summary', [SupplierLoanController::class, 'getSupplierLoansSummary']);
+    // Supplier Loan Summary Routes
     Route::get('/supplier-loan/loan-summary', [SupplierLoanController::class, 'getLoanSummary']);
 
     // ==================== FARMER LOAN ROUTES ====================
@@ -379,13 +384,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/creditors/supplier/{supplierCode}', [CreditorController::class, 'getSupplierCreditors']);
     Route::get('/creditors/pending/all', [CreditorController::class, 'getPendingCreditors']);
     Route::post('/creditors/create-with-supplier', [CreditorController::class, 'createCreditorWithSupplier']);
+    
     // Debtor and Creditor Report Routes
     Route::get('/debtor-creditor/combined', [DebtorCreditorController::class, 'getCombinedReport']);
     Route::get('/debtor-creditor/debtor/{code}', [DebtorCreditorController::class, 'getDebtorDetails']);
     Route::get('/debtor-creditor/creditor/{code}', [DebtorCreditorController::class, 'getCreditorDetails']);
     Route::get('/debtor-creditor/debtors', [DebtorCreditorController::class, 'getDebtorReport']);
     Route::get('/debtor-creditor/creditors', [DebtorCreditorController::class, 'getCreditorReport']);
-    
+
     // Add this inside the authenticated routes group
     Route::get('/sales/archived', [SalesEntryController::class, 'getArchivedSales']);
+    
 });

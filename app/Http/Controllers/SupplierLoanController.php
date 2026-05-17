@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Creditor;
 use App\Models\Sale;
+use App\Models\SalesHistory;
 use App\Models\SupplierLoan;
 use DB;
 use Illuminate\Http\Request;
@@ -43,21 +44,26 @@ class SupplierLoanController extends Controller
             'bag_value' => 'nullable|numeric',
             'box_value' => 'nullable|numeric',
             'adjustment_amount' => 'nullable|numeric',
-            // Bill to Bill fields (simplified - only supplier fields)
             'target_supplier_code' => 'nullable|string',
             'target_supplier_bill_no' => 'nullable|string',
             'target_supplier_bill_value' => 'nullable|numeric',
-            // Bad debt fields
             'bad_debt_name' => 'nullable|string',
-            'bad_debt_amount' => 'nullable|numeric'
+            'bad_debt_amount' => 'nullable|numeric',
+            'use_history' => 'nullable|boolean'
         ]);
 
         try {
             DB::beginTransaction();
 
-            // IMPORTANT FIX: Calculate total payable from sales records
-            // First, get all sales records for this bill
-            $salesQuery = Sale::where('supplier_code', $validated['code']);
+            $useHistory = $request->input('use_history', false);
+            $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
+            
+            // Calculate total payable from sales or sales_history records
+            if ($useHistory) {
+                $salesQuery = SalesHistory::where('supplier_code', $validated['code']);
+            } else {
+                $salesQuery = Sale::where('supplier_code', $validated['code']);
+            }
 
             if (!empty($validated['bill_no'])) {
                 $salesQuery->where('supplier_bill_no', $validated['bill_no']);
@@ -74,12 +80,16 @@ class SupplierLoanController extends Controller
                 return (float) ($sale->SupplierTotal ?? 0);
             });
 
-            Log::info('Calculated total payable', ['total_payable' => $totalPayable]);
+            Log::info('Calculated total payable', [
+                'total_payable' => $totalPayable,
+                'use_history' => $useHistory
+            ]);
 
             $settingDate = $this->getSettingDate();
 
-            // Get existing loan record
-            $existingLoan = SupplierLoan::where('code', $validated['code'])
+            // Get existing loan record from the appropriate table
+            $existingLoan = DB::table($table)
+                ->where('code', $validated['code'])
                 ->where('bill_no', $validated['bill_no'])
                 ->first();
 
@@ -92,38 +102,41 @@ class SupplierLoanController extends Controller
                 ->first();
 
             if ($creditorRecord && $creditorRecord->Creditor_no) {
-                // Use existing creditor number from creditors table
                 $creditorNo = $creditorRecord->Creditor_no;
                 Log::info('Found existing creditor number from creditors table', [
                     'creditor_no' => $creditorNo,
                     'bill_no' => $validated['bill_no'],
                     'supplier_code' => $validated['code']
                 ]);
-            } elseif ($existingLoan && $existingLoan->Creditor_no) {
-                // Fallback: use existing loan's creditor number
+            } elseif ($existingLoan && isset($existingLoan->Creditor_no) && $existingLoan->Creditor_no) {
                 $creditorNo = $existingLoan->Creditor_no;
                 Log::info('Using creditor number from existing loan', [
                     'creditor_no' => $creditorNo
                 ]);
             }
 
-            // Calculate new totals
+            // Calculate payment amounts
             $currentPaidAmount = $existingLoan ? ($existingLoan->loan_amount ?? 0) : 0;
             $newPaidAmount = $currentPaidAmount + $validated['loan_amount'];
-            $newRemainingAmount = max(0, $totalPayable - $newPaidAmount);
+            
+            // IMPORTANT: Store the original bill total in total_amount, not the remaining
+            // This is the bill total amount from sales records
+            $billTotalAmount = $totalPayable;
 
             Log::info('Payment calculation', [
                 'current_paid' => $currentPaidAmount,
                 'new_payment' => $validated['loan_amount'],
                 'new_total_paid' => $newPaidAmount,
+                'bill_total_amount' => $billTotalAmount,
                 'total_payable' => $totalPayable,
-                'new_remaining' => $newRemainingAmount,
-                'creditor_no' => $creditorNo
+                'creditor_no' => $creditorNo,
+                'use_history' => $useHistory,
+                'table' => $table
             ]);
 
             // Merge payment details
             $existingPaymentDetails = [];
-            if ($existingLoan && $existingLoan->payment_details) {
+            if ($existingLoan && isset($existingLoan->payment_details) && $existingLoan->payment_details) {
                 $existingPaymentDetails = is_array($existingLoan->payment_details)
                     ? $existingLoan->payment_details
                     : (json_decode($existingLoan->payment_details, true) ?: []);
@@ -132,17 +145,17 @@ class SupplierLoanController extends Controller
             $newPaymentDetails = $validated['payment_details'] ?? [];
             $mergedPaymentDetails = array_merge($existingPaymentDetails, $newPaymentDetails);
 
-            // Prepare the data array
+            // Prepare the data array - total_amount is the BILL TOTAL, not remaining
             $loanData = [
                 'code' => $validated['code'],
                 'bill_no' => $validated['bill_no'],
                 'loan_amount' => $newPaidAmount,
-                'total_amount' => $newRemainingAmount,
+                'total_amount' => $billTotalAmount,
                 'notes' => $validated['notes'] ?? null,
                 'Date' => $settingDate,
                 'payment_type' => $validated['type'] ?? 'Cash',
-                'payment_details' => $mergedPaymentDetails,
-                'Creditor_no' => $creditorNo, // Add creditor number (may be null)
+                'payment_details' => json_encode($mergedPaymentDetails),
+                'Creditor_no' => $creditorNo,
             ];
 
             // Handle payment type and specific fields
@@ -153,7 +166,6 @@ class SupplierLoanController extends Controller
             $badDebtName = $validated['bad_debt_name'] ?? $request->input('bad_debt_name') ?? null;
             $badDebtAmount = $validated['bad_debt_amount'] ?? $request->input('bad_debt_amount') ?? 0;
 
-            // Also check payment_details for bad debt
             if (empty($badDebtName) && !empty($validated['payment_details'])) {
                 foreach ($validated['payment_details'] as $payment) {
                     if (isset($payment['method']) && $payment['method'] === 'bad_debt') {
@@ -164,12 +176,10 @@ class SupplierLoanController extends Controller
                 }
             }
 
-            // Set bad debt fields if this is a bad debt payment
             if ($paymentType === 'bad_debt' || !empty($badDebtName)) {
                 $loanData['bad_debt_name'] = $badDebtName;
                 $loanData['bad_debt_amount'] = floatval($badDebtAmount);
                 $loanData['type'] = 'bad_debt';
-                $loanData['total_amount'] = max(0, $totalPayable - $newPaidAmount - floatval($badDebtAmount));
                 Log::info('Setting bad debt fields', [
                     'bad_debt_name' => $badDebtName,
                     'bad_debt_amount' => $badDebtAmount
@@ -181,6 +191,7 @@ class SupplierLoanController extends Controller
                 $loanData['bank_name'] = $validated['bank_name'] ?? null;
                 $loanData['cheque_no'] = $validated['cheque_no'] ?? null;
                 $loanData['realized_date'] = $validated['realized_date'] ?? $settingDate;
+                $loanData['bank_account_id'] = $validated['bank_account_id'] ?? null;
             } elseif ($paymentType === 'Bank Transfer') {
                 $loanData['bank_name'] = $validated['bank_name'] ?? null;
                 $loanData['transfer_reference_no'] = $validated['transfer_reference_no'] ?? null;
@@ -194,7 +205,6 @@ class SupplierLoanController extends Controller
                 $loanData['box_value'] = $validated['box_value'] ?? 0;
                 $loanData['adjustment_amount'] = $validated['loan_amount'];
             } elseif ($paymentType === 'bill_to_bill') {
-                // Updated: Only supplier fields
                 $loanData['target_supplier_code'] = $validated['target_supplier_code'] ?? null;
                 $loanData['target_supplier_bill_no'] = $validated['target_supplier_bill_no'] ?? null;
                 $loanData['target_supplier_bill_value'] = $validated['target_supplier_bill_value'] ?? 0;
@@ -203,8 +213,8 @@ class SupplierLoanController extends Controller
 
             Log::info('Final loan data before save', $loanData);
 
-            // Update or create record
-            $loan = SupplierLoan::updateOrCreate(
+            // Update or create record in the appropriate table
+            DB::table($table)->updateOrInsert(
                 [
                     'code' => $validated['code'],
                     'bill_no' => $validated['bill_no']
@@ -212,23 +222,38 @@ class SupplierLoanController extends Controller
                 $loanData
             );
 
-            Log::info('Loan record saved', ['id' => $loan->id, 'remaining' => $loan->total_amount, 'creditor_no' => $creditorNo]);
+            // Get the saved record
+            $savedLoan = DB::table($table)
+                ->where('code', $validated['code'])
+                ->where('bill_no', $validated['bill_no'])
+                ->first();
 
-            // ==================== UPDATE SALES TABLE WITH CREDITOR_NO ====================
-            // Update all matching sales records with the creditor number from creditors table
+            Log::info('Loan record saved', ['table' => $table, 'loan_amount' => $savedLoan->loan_amount ?? $newPaidAmount, 'total_amount' => $savedLoan->total_amount ?? $billTotalAmount, 'creditor_no' => $creditorNo]);
+
+            // ==================== UPDATE SALES/SALES_HISTORY TABLE WITH CREDITOR_NO ====================
             if ($creditorNo) {
-                $updatedSalesCount = Sale::where('supplier_code', $validated['code'])
-                    ->where('supplier_bill_no', $validated['bill_no'])
-                    ->update([
-                        'Creditor_no' => $creditorNo,
-                        'updated_at' => now()
-                    ]);
+                if ($useHistory) {
+                    $updatedSalesCount = SalesHistory::where('supplier_code', $validated['code'])
+                        ->where('supplier_bill_no', $validated['bill_no'])
+                        ->update([
+                            'Creditor_no' => $creditorNo,
+                            'updated_at' => now()
+                        ]);
+                } else {
+                    $updatedSalesCount = Sale::where('supplier_code', $validated['code'])
+                        ->where('supplier_bill_no', $validated['bill_no'])
+                        ->update([
+                            'Creditor_no' => $creditorNo,
+                            'updated_at' => now()
+                        ]);
+                }
 
                 Log::info('Updated sales records with Creditor_no from creditors table', [
                     'creditor_no' => $creditorNo,
                     'supplier_code' => $validated['code'],
                     'bill_no' => $validated['bill_no'],
-                    'records_updated' => $updatedSalesCount
+                    'records_updated' => $updatedSalesCount,
+                    'use_history' => $useHistory
                 ]);
             } else {
                 Log::warning('No creditor number found to update sales table', [
@@ -237,8 +262,10 @@ class SupplierLoanController extends Controller
                 ]);
             }
 
-            // Update sales records (loan taken flag)
-            $this->updateSalesRecords($validated);
+            // Update sales records (loan taken flag) - only for current table
+            if (!$useHistory) {
+                $this->updateSalesRecords($validated);
+            }
 
             // If this is a bill_to_bill payment, update the target supplier bill
             if ($paymentType === 'bill_to_bill') {
@@ -247,7 +274,8 @@ class SupplierLoanController extends Controller
                         $validated['target_supplier_code'],
                         $validated['target_supplier_bill_no'],
                         $validated['target_supplier_bill_value'] ?? 0,
-                        $creditorNo // Pass the creditor number to also update target sales
+                        $creditorNo,
+                        $useHistory
                     );
                 }
             }
@@ -257,8 +285,10 @@ class SupplierLoanController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Payment saved successfully.',
-                'data' => $loan,
-                'creditor_no' => $creditorNo
+                'data' => $savedLoan,
+                'creditor_no' => $creditorNo,
+                'bill_total' => $billTotalAmount,
+                'table_used' => $table
             ], 200);
 
         } catch (\Exception $e) {
@@ -273,19 +303,563 @@ class SupplierLoanController extends Controller
     }
 
     /**
-     * Update target supplier bill payment
+     * Get supplier loans summary with option to view history
      */
-    protected function updateTargetSupplierBillPayment($supplierCode, $supplierBillNo, $paymentAmount, $creditorNo = null)
+    public function getSupplierLoansSummary(Request $request): JsonResponse
+    {
+        try {
+            $useHistory = $request->query('use_history', false);
+            $startDate = $request->query('start_date');
+            $endDate = $request->query('end_date');
+            $isDateFiltered = $request->query('date_filtered', false);
+
+            // Determine which table to use for loans
+            $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
+            
+            Log::info('Fetching supplier loans summary', [
+                'use_history' => $useHistory,
+                'table' => $table,
+                'start_date' => $startDate,
+                'end_date' => $endDate,
+                'is_date_filtered' => $isDateFiltered
+            ]);
+
+            if ($useHistory) {
+                // For history table, we need to show ALL records from history
+                $query = DB::table($table)->select('code', 'bill_no', 'loan_amount', 'total_amount', 'Creditor_no', 'Date', 'type', 'payment_details');
+                
+                // Apply date filters if provided
+                if ($isDateFiltered && $startDate && $endDate) {
+                    $start = date('Y-m-d', strtotime($startDate));
+                    $end = date('Y-m-d', strtotime($endDate));
+                    $query->whereDate('Date', '>=', $start)
+                          ->whereDate('Date', '<=', $end);
+                    Log::info('Applied date filter to query', ['start' => $start, 'end' => $end]);
+                }
+                
+                $allLoans = $query->get();
+                
+                Log::info('History loans fetched', [
+                    'count' => $allLoans->count(),
+                    'sample' => $allLoans->take(5)->toArray()
+                ]);
+                
+                // For history, separate pending vs completed based on payment status
+                $pendingBills = [];
+                $completedBills = [];
+                
+                foreach ($allLoans as $loan) {
+                    $totalAmount = floatval($loan->total_amount);
+                    $loanAmount = floatval($loan->loan_amount);
+                    
+                    // Check if this loan is fully paid (loan_amount >= total_amount means fully paid)
+                    // Note: total_amount in history is the bill total, loan_amount is total paid
+                    if ($loanAmount >= $totalAmount) {
+                        // Fully paid - FULLY SETTLED
+                        $completedBills[] = [
+                            'supplier_code' => $loan->code,
+                            'supplier_bill_no' => $loan->bill_no,
+                            'loan_amount' => $loanAmount,
+                            'total_amount' => $totalAmount,
+                            'creditor_no' => $loan->Creditor_no,
+                            'date' => $loan->Date ?? null,
+                            'is_history' => true,
+                            'type' => $loan->type ?? null
+                        ];
+                    } else {
+                        // Still has remaining balance - NOT SETTLED (from history)
+                        $pendingBills[] = [
+                            'supplier_code' => $loan->code,
+                            'supplier_bill_no' => $loan->bill_no,
+                            'loan_amount' => $loanAmount,
+                            'total_amount' => $totalAmount,
+                            'creditor_no' => $loan->Creditor_no,
+                            'date' => $loan->Date ?? null,
+                            'is_history' => true,
+                            'type' => $loan->type ?? null
+                        ];
+                    }
+                }
+                
+                Log::info('History summary result', [
+                    'pending_count' => count($pendingBills),
+                    'completed_count' => count($completedBills),
+                    'total_history_records' => $allLoans->count()
+                ]);
+                
+                return response()->json([
+                    'printed' => $completedBills,    // Fully settled from history
+                    'unprinted' => $pendingBills,     // Not settled from history
+                    'table_used' => $table,
+                    'date_filter_applied' => $isDateFiltered ? true : false,
+                    'total_loans_found' => $allLoans->count()
+                ]);
+                
+            } else {
+                // For current table, use the original logic with sales matching
+                // Get all printed bills from sales table
+                $allPrintedBills = DB::table('sales')
+                    ->select('supplier_code', 'supplier_bill_no')
+                    ->whereNotNull('supplier_code')
+                    ->where('supplier_bill_printed', 'Y')
+                    ->whereNotNull('supplier_bill_no')
+                    ->where('supplier_bill_no', '!=', '')
+                    ->groupBy('supplier_code', 'supplier_bill_no')
+                    ->get()
+                    ->map(function ($item) {
+                        return [
+                            'supplier_code' => $item->supplier_code,
+                            'supplier_bill_no' => $item->supplier_bill_no
+                        ];
+                    });
+
+                Log::info('Found printed bills count', ['count' => $allPrintedBills->count()]);
+
+                // Get loans from current table
+                $query = DB::table($table)->select('code', 'bill_no', 'loan_amount', 'total_amount', 'Creditor_no', 'Date', 'type');
+                
+                $allLoans = $query->get();
+                
+                Log::info('Current loans fetched', [
+                    'count' => $allLoans->count(),
+                    'sample' => $allLoans->take(5)->toArray()
+                ]);
+
+                // Create a keyed collection for faster lookup
+                $allLoansKeyed = $allLoans->keyBy(function ($item) {
+                    return $item->code . '|' . $item->bill_no;
+                });
+
+                // Separate: Pending = have loans with remaining balance > 0
+                $pendingBills = [];
+                $completedBills = [];
+
+                foreach ($allPrintedBills as $bill) {
+                    $key = $bill['supplier_code'] . '|' . $bill['supplier_bill_no'];
+                    
+                    if (isset($allLoansKeyed[$key])) {
+                        // Has loan record
+                        $loanRecord = $allLoansKeyed[$key];
+                        $totalAmount = floatval($loanRecord->total_amount);
+                        $loanAmount = floatval($loanRecord->loan_amount);
+                        $remainingAmount = $totalAmount - $loanAmount;
+                        
+                        if ($remainingAmount > 0) {
+                            // Still has remaining balance - NOT SETTLED
+                            $pendingBills[] = [
+                                'supplier_code' => $bill['supplier_code'],
+                                'supplier_bill_no' => $bill['supplier_bill_no'],
+                                'loan_amount' => $loanAmount,
+                                'total_amount' => $remainingAmount,
+                                'creditor_no' => $loanRecord->Creditor_no,
+                                'date' => $loanRecord->Date ?? null,
+                                'type' => $loanRecord->type ?? null
+                            ];
+                        } else {
+                            // Fully paid - FULLY SETTLED
+                            $completedBills[] = [
+                                'supplier_code' => $bill['supplier_code'],
+                                'supplier_bill_no' => $bill['supplier_bill_no'],
+                                'creditor_no' => $loanRecord->Creditor_no,
+                                'date' => $loanRecord->Date ?? null,
+                                'type' => $loanRecord->type ?? null
+                            ];
+                        }
+                    } else {
+                        // No loan record - means never paid, treat as pending with full amount
+                        $totalPayable = DB::table('sales')
+                            ->where('supplier_code', $bill['supplier_code'])
+                            ->where('supplier_bill_no', $bill['supplier_bill_no'])
+                            ->where('supplier_bill_printed', 'Y')
+                            ->sum('SupplierTotal');
+
+                        $pendingBills[] = [
+                            'supplier_code' => $bill['supplier_code'],
+                            'supplier_bill_no' => $bill['supplier_bill_no'],
+                            'loan_amount' => 0,
+                            'total_amount' => floatval($totalPayable),
+                            'creditor_no' => null,
+                            'date' => null,
+                            'type' => null
+                        ];
+                    }
+                }
+
+                Log::info('Current summary result', [
+                    'pending_count' => count($pendingBills),
+                    'completed_count' => count($completedBills),
+                    'table_used' => $table
+                ]);
+
+                return response()->json([
+                    'printed' => $completedBills,
+                    'unprinted' => $pendingBills,
+                    'table_used' => $table,
+                    'date_filter_applied' => false,
+                    'total_loans_found' => $allLoans->count()
+                ]);
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Error in getSupplierLoansSummary: ' . $e->getMessage());
+            Log::error('Stack trace: ' . $e->getTraceAsString());
+            return response()->json([
+                'printed' => [],
+                'unprinted' => []
+            ]);
+        }
+    }
+
+    /**
+     * Get payment history with support for history table
+     */
+    public function getPaymentHistory(Request $request): JsonResponse
+    {
+        $code = $request->query('code');
+        $billNo = $request->query('bill_no');
+        $useHistory = $request->query('use_history', false);
+        $startDate = $request->query('start_date');
+        $endDate = $request->query('end_date');
+
+        try {
+            $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
+            
+            $query = DB::table($table)
+                ->where('code', $code)
+                ->where('bill_no', $billNo);
+            
+            // Apply date filters if provided
+            if ($startDate && $endDate) {
+                $start = date('Y-m-d', strtotime($startDate));
+                $end = date('Y-m-d', strtotime($endDate));
+                $query->whereDate('Date', '>=', $start)
+                      ->whereDate('Date', '<=', $end);
+            } elseif ($startDate) {
+                $query->whereDate('Date', '>=', date('Y-m-d', strtotime($startDate)));
+            } elseif ($endDate) {
+                $query->whereDate('Date', '<=', date('Y-m-d', strtotime($endDate)));
+            }
+            
+            $loan = $query->first();
+
+            if (!$loan) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No payment records found'
+                ], 404);
+            }
+
+            $paymentDetails = isset($loan->payment_details) ? $loan->payment_details : null;
+            if (is_string($paymentDetails)) {
+                $paymentDetails = json_decode($paymentDetails, true);
+            }
+            if (!is_array($paymentDetails)) {
+                $paymentDetails = [];
+            }
+
+            $totalAmount = floatval($loan->total_amount ?? 0);
+            $loanAmount = floatval($loan->loan_amount ?? 0);
+            $remainingBalance = $totalAmount - $loanAmount;
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_paid' => $loanAmount,
+                    'remaining_balance' => $remainingBalance,
+                    'payments' => $paymentDetails,
+                    'payment_methods' => $loan->type ?? null,
+                    'creditor_no' => $loan->Creditor_no ?? null,
+                    'table_used' => $table
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Payment History Error: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch payment history'
+            ], 500);
+        }
+    }
+
+    /**
+     * Find loan by code and bill number with history support
+     */
+    public function findLoan(Request $request): JsonResponse
+    {
+        $code = $request->query('code');
+        $billNo = $request->query('bill_no');
+        $useHistory = $request->query('use_history', false);
+        $startDate = $request->query('start_date');
+        $endDate = $request->query('end_date');
+
+        $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
+        
+        $query = DB::table($table)
+            ->where('code', $code)
+            ->where('bill_no', $billNo);
+        
+        // Apply date filters if provided
+        if ($startDate && $endDate) {
+            $start = date('Y-m-d', strtotime($startDate));
+            $end = date('Y-m-d', strtotime($endDate));
+            $query->whereDate('Date', '>=', $start)
+                  ->whereDate('Date', '<=', $end);
+        } elseif ($startDate) {
+            $query->whereDate('Date', '>=', date('Y-m-d', strtotime($startDate)));
+        } elseif ($endDate) {
+            $query->whereDate('Date', '<=', date('Y-m-d', strtotime($endDate)));
+        }
+        
+        $loan = $query->first();
+
+        if (!$loan) {
+            return response()->json(['message' => 'Not found'], 404);
+        }
+
+        if (isset($loan->payment_details) && is_string($loan->payment_details)) {
+            $loan->payment_details = json_decode($loan->payment_details, true);
+        }
+
+        return response()->json($loan);
+    }
+
+    /**
+     * Get supplier bill details for a specific bill (with history support)
+     */
+    public function getSupplierBillDetails($billNo, Request $request): JsonResponse
+    {
+        try {
+            $supplierCode = $request->query('supplier_code');
+            $useHistory = $request->query('use_history', false);
+
+            // Fetch from appropriate table based on useHistory flag
+            if ($useHistory) {
+                $sales = SalesHistory::where('supplier_bill_no', $billNo)
+                    ->where('supplier_code', $supplierCode)
+                    ->where('supplier_bill_printed', 'Y')
+                    ->get();
+            } else {
+                $sales = Sale::where('supplier_bill_no', $billNo)
+                    ->where('supplier_code', $supplierCode)
+                    ->where('supplier_bill_printed', 'Y')
+                    ->get();
+            }
+
+            if ($sales->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No sales found for this bill'
+                ], 404);
+            }
+
+            // If using history, also fetch the loan record
+            if ($useHistory) {
+                $loanRecord = DB::table('supplier_loans_history')
+                    ->where('code', $supplierCode)
+                    ->where('bill_no', $billNo)
+                    ->first();
+                    
+                return response()->json([
+                    'sales' => $sales,
+                    'loan_record' => $loanRecord,
+                    'use_history' => true
+                ]);
+            }
+
+            return response()->json($sales);
+
+        } catch (\Exception $e) {
+            Log::error('Error fetching supplier bill details: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch bill details'
+            ], 500);
+        }
+    }
+
+    /**
+     * Get unprinted supplier details (pending loans) - with history support
+     */
+    public function getUnprintedDetails($supplierCode, Request $request): JsonResponse
+    {
+        try {
+            $useHistory = $request->query('use_history', false);
+            
+            // Fetch from appropriate table based on useHistory flag
+            if ($useHistory) {
+                $sales = SalesHistory::where('supplier_code', $supplierCode)
+                    ->where(function ($q) {
+                        $q->where('supplier_bill_printed', 'N')
+                            ->orWhereNull('supplier_bill_printed');
+                    })
+                    ->where('bill_printed', 'Y')
+                    ->get();
+            } else {
+                $sales = Sale::where('supplier_code', $supplierCode)
+                    ->where(function ($q) {
+                        $q->where('supplier_bill_printed', 'N')
+                            ->orWhereNull('supplier_bill_printed');
+                    })
+                    ->where('bill_printed', 'Y')
+                    ->get();
+            }
+
+            if ($sales->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                ], 404);
+            }
+
+            // If using history, fetch loan records for these sales
+            if ($useHistory) {
+                $loanRecords = DB::table('supplier_loans_history')
+                    ->where('code', $supplierCode)
+                    ->get()
+                    ->keyBy('bill_no');
+                    
+                return response()->json([
+                    'sales' => $sales,
+                    'loan_records' => $loanRecords,
+                    'use_history' => true
+                ]);
+            }
+
+            return response()->json($sales);
+
+        } catch (\Exception $e) {
+            Log::error('Error fetching unprinted details: ' . $e->getMessage());
+            return response()->json([
+                'success' => false
+            ], 500);
+        }
+    }
+
+    /**
+     * Delete loan record (supports both current and history tables)
+     */
+    public function deleteLoanRecord(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'code' => 'required|string',
+            'bill_no' => 'nullable|string',
+            'use_history' => 'nullable|boolean'
+        ]);
+
+        $useHistory = $validated['use_history'] ?? false;
+        $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
+
+        DB::beginTransaction();
+
+        try {
+            // Delete from the appropriate table
+            $deleted = DB::table($table)
+                ->where('code', $validated['code'])
+                ->where('bill_no', $validated['bill_no'])
+                ->delete();
+
+            if (!$deleted) {
+                DB::rollback();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Loan record not found.'
+                ], 404);
+            }
+
+            // Also delete creditor record if exists
+            $creditor = Creditor::where('bill_no', $validated['bill_no'])
+                ->where('supplier_code', $validated['code'])
+                ->first();
+
+            if ($creditor) {
+                $creditor->forceDelete();
+            }
+
+            // Only update sales records for current table (not history)
+            if (!$useHistory) {
+                Sale::where('supplier_code', $validated['code'])
+                    ->where('supplier_bill_no', $validated['bill_no'])
+                    ->update([
+                        'loan_taken' => null,
+                        'Creditor_no' => null
+                    ]);
+            } else {
+                // Also remove from sales_history if needed
+                SalesHistory::where('supplier_code', $validated['code'])
+                    ->where('supplier_bill_no', $validated['bill_no'])
+                    ->update([
+                        'Creditor_no' => null
+                    ]);
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Loan and creditor records permanently deleted successfully.',
+                'table_used' => $table
+            ], 200);
+
+        } catch (\Exception $e) {
+            DB::rollback();
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete record: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get all banks
+     */
+    public function getBanks(): JsonResponse
+    {
+        try {
+            $banks = Bank::all(['id', 'bank_name', 'branch', 'account_no']);
+            return response()->json([
+                'success' => true,
+                'data' => $banks
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch banks'
+            ], 500);
+        }
+    }
+
+    /**
+     * Get banks list for dropdown
+     */
+    public function getBanksList(): JsonResponse
+    {
+        try {
+            $banks = Bank::select('id', 'bank_name', 'branch', 'account_no')->get();
+            return response()->json([
+                'success' => true,
+                'data' => $banks
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch banks'
+            ], 500);
+        }
+    }
+
+    /**
+     * Update target supplier bill payment (with history support)
+     */
+    protected function updateTargetSupplierBillPayment($supplierCode, $supplierBillNo, $paymentAmount, $creditorNo = null, $useHistory = false)
     {
         try {
             Log::info('Updating target supplier bill payment', [
                 'supplier_code' => $supplierCode,
                 'supplier_bill_no' => $supplierBillNo,
                 'payment_amount' => $paymentAmount,
-                'creditor_no' => $creditorNo
+                'creditor_no' => $creditorNo,
+                'use_history' => $useHistory
             ]);
 
-            // Try to fetch creditor number from creditors table for target bill
             $targetCreditorNo = $creditorNo;
 
             if (!$targetCreditorNo) {
@@ -295,121 +869,91 @@ class SupplierLoanController extends Controller
 
                 if ($creditorRecord && $creditorRecord->Creditor_no) {
                     $targetCreditorNo = $creditorRecord->Creditor_no;
-                    Log::info('Found creditor number from creditors table for target bill', [
-                        'creditor_no' => $targetCreditorNo,
-                        'bill_no' => $supplierBillNo,
-                        'supplier_code' => $supplierCode
-                    ]);
                 }
             }
 
-            // Find the supplier loan record for the target bill
-            $targetLoan = SupplierLoan::where('code', $supplierCode)
+            $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
+            
+            $targetLoan = DB::table($table)
+                ->where('code', $supplierCode)
                 ->where('bill_no', $supplierBillNo)
                 ->first();
 
-            // If target loan exists but has no creditor number, update it
-            if ($targetLoan && !$targetLoan->Creditor_no && $targetCreditorNo) {
-                $targetLoan->Creditor_no = $targetCreditorNo;
-                $targetLoan->save();
-                Log::info('Updated target loan with creditor number', [
-                    'supplier_code' => $supplierCode,
-                    'bill_no' => $supplierBillNo,
-                    'creditor_no' => $targetCreditorNo
-                ]);
+            // Get total payable from appropriate sales table
+            if ($useHistory) {
+                $totalPayable = SalesHistory::where('supplier_code', $supplierCode)
+                    ->where('supplier_bill_no', $supplierBillNo)
+                    ->sum('SupplierTotal');
+            } else {
+                $totalPayable = Sale::where('supplier_code', $supplierCode)
+                    ->where('supplier_bill_no', $supplierBillNo)
+                    ->sum('SupplierTotal');
             }
 
             if ($targetLoan) {
-                // Get the total payable amount for this bill from sales records
-                $totalPayable = Sale::where('supplier_code', $supplierCode)
-                    ->where('supplier_bill_no', $supplierBillNo)
-                    ->sum('SupplierTotal');
-
-                // Update the target loan's loan_amount (paid amount)
-                $newPaidAmount = ($targetLoan->loan_amount ?? 0) + $paymentAmount;
-                $newRemainingAmount = max(0, $totalPayable - $newPaidAmount);
-
-                $targetLoan->loan_amount = $newPaidAmount;
-                $targetLoan->total_amount = $newRemainingAmount;
-                $targetLoan->save();
-
-                Log::info('Updated target supplier loan record', [
-                    'supplier_code' => $supplierCode,
-                    'bill_no' => $supplierBillNo,
-                    'creditor_no' => $targetCreditorNo,
-                    'old_paid' => ($targetLoan->loan_amount ?? 0) - $paymentAmount,
-                    'new_paid' => $newPaidAmount,
-                    'total_payable' => $totalPayable,
-                    'remaining' => $newRemainingAmount
+                $currentPaid = floatval($targetLoan->loan_amount ?? 0);
+                $newPaidAmount = $currentPaid + $paymentAmount;
+                
+                $updateData = [
+                    'loan_amount' => $newPaidAmount,
+                    'updated_at' => now()
+                ];
+                
+                if ($targetCreditorNo && empty($targetLoan->Creditor_no)) {
+                    $updateData['Creditor_no'] = $targetCreditorNo;
+                }
+                
+                DB::table($table)
+                    ->where('code', $supplierCode)
+                    ->where('bill_no', $supplierBillNo)
+                    ->update($updateData);
+                    
+                Log::info('Updated target loan record', [
+                    'table' => $table,
+                    'new_paid_amount' => $newPaidAmount
                 ]);
             } else {
-                // Create a new loan record if it doesn't exist
-                $totalPayable = Sale::where('supplier_code', $supplierCode)
-                    ->where('supplier_bill_no', $supplierBillNo)
-                    ->sum('SupplierTotal');
-
-                $newRemainingAmount = max(0, $totalPayable - $paymentAmount);
-
-                $newLoan = SupplierLoan::create([
+                $newLoanData = [
                     'code' => $supplierCode,
                     'bill_no' => $supplierBillNo,
                     'loan_amount' => $paymentAmount,
-                    'total_amount' => $newRemainingAmount,
+                    'total_amount' => $totalPayable,
                     'Date' => now(),
                     'payment_type' => 'Bill to Bill Transfer',
                     'type' => 'bill_to_bill',
-                    'Creditor_no' => $targetCreditorNo
-                ]);
-
-                Log::info('Created new supplier loan record for target bill', [
-                    'supplier_code' => $supplierCode,
-                    'bill_no' => $supplierBillNo,
-                    'creditor_no' => $targetCreditorNo,
-                    'loan_id' => $newLoan->id,
-                    'paid_amount' => $paymentAmount,
-                    'remaining' => $newRemainingAmount
-                ]);
+                    'Creditor_no' => $targetCreditorNo,
+                    'created_at' => now(),
+                    'updated_at' => now()
+                ];
+                
+                DB::table($table)->insert($newLoanData);
+                Log::info('Created new target loan record', ['table' => $table]);
             }
 
-            // Update the sales records for this supplier bill with Creditor_no
-            if ($targetCreditorNo) {
-                $updatedCount = Sale::where('supplier_code', $supplierCode)
-                    ->where('supplier_bill_no', $supplierBillNo)
-                    ->update([
-                        'supplier_paid_amount' => DB::raw('COALESCE(supplier_paid_amount, 0) + ' . floatval($paymentAmount)),
-                        'supplier_paid_status' => 'Y',
-                        'Creditor_no' => $targetCreditorNo, // Update creditor number in sales table
-                        'updated_at' => now()
-                    ]);
-
-                Log::info('Updated target supplier sales records with creditor number', [
-                    'supplier_code' => $supplierCode,
-                    'bill_no' => $supplierBillNo,
-                    'creditor_no' => $targetCreditorNo,
-                    'payment_amount' => $paymentAmount,
-                    'records_updated' => $updatedCount
-                ]);
-            } else {
-                // Still update payment but without creditor number
-                $updatedCount = Sale::where('supplier_code', $supplierCode)
-                    ->where('supplier_bill_no', $supplierBillNo)
-                    ->update([
-                        'supplier_paid_amount' => DB::raw('COALESCE(supplier_paid_amount, 0) + ' . floatval($paymentAmount)),
-                        'supplier_paid_status' => 'Y',
-                        'updated_at' => now()
-                    ]);
-
-                Log::info('Updated target supplier sales records (without creditor number)', [
-                    'supplier_code' => $supplierCode,
-                    'bill_no' => $supplierBillNo,
-                    'payment_amount' => $paymentAmount,
-                    'records_updated' => $updatedCount
-                ]);
+            // Only update sales for current table (not history)
+            if (!$useHistory) {
+                if ($targetCreditorNo) {
+                    Sale::where('supplier_code', $supplierCode)
+                        ->where('supplier_bill_no', $supplierBillNo)
+                        ->update([
+                            'supplier_paid_amount' => DB::raw('COALESCE(supplier_paid_amount, 0) + ' . floatval($paymentAmount)),
+                            'supplier_paid_status' => 'Y',
+                            'Creditor_no' => $targetCreditorNo,
+                            'updated_at' => now()
+                        ]);
+                } else {
+                    Sale::where('supplier_code', $supplierCode)
+                        ->where('supplier_bill_no', $supplierBillNo)
+                        ->update([
+                            'supplier_paid_amount' => DB::raw('COALESCE(supplier_paid_amount, 0) + ' . floatval($paymentAmount)),
+                            'supplier_paid_status' => 'Y',
+                            'updated_at' => now()
+                        ]);
+                }
             }
 
         } catch (\Exception $e) {
             Log::error('Error updating target supplier bill payment: ' . $e->getMessage());
-            Log::error('Stack trace: ' . $e->getTraceAsString());
             throw $e;
         }
     }
@@ -424,14 +968,12 @@ class SupplierLoanController extends Controller
         $setting = Setting::where('key', 'current_date')->first();
         if ($setting && $setting->value) {
             $settingDate = $setting->value;
-            Log::info('Date found from current_date setting', ['value' => $settingDate]);
         }
 
         if (!$settingDate) {
             $setting = Setting::where('key', 'Date_of_balance')->first();
             if ($setting && $setting->value) {
                 $settingDate = $setting->value;
-                Log::info('Date found from Date_of_balance setting', ['value' => $settingDate]);
             }
         }
 
@@ -439,13 +981,11 @@ class SupplierLoanController extends Controller
             $setting = Setting::first();
             if ($setting && $setting->value) {
                 $settingDate = $setting->value;
-                Log::info('Date found from first setting record', ['value' => $settingDate]);
             }
         }
 
         if (!$settingDate) {
             $settingDate = now()->format('Y-m-d');
-            Log::info('Using current date as fallback', ['value' => $settingDate]);
         }
 
         return $settingDate;
@@ -477,54 +1017,6 @@ class SupplierLoanController extends Controller
         ]);
 
         Log::info('Updated sales records count', ['count' => $count]);
-    }
-
-    /**
-     * Update target customer bill
-     */
-    private function updateTargetCustomerBill($customerCode, $billNo, $amount)
-    {
-        Sale::where('customer_code', $customerCode)
-            ->where('bill_no', $billNo)
-            ->where('bill_printed', 'Y')
-            ->update([
-                'given_amount' => DB::raw('COALESCE(given_amount, 0) + ' . $amount),
-                'given_amount_applied' => DB::raw('CASE WHEN COALESCE(given_amount, 0) + ' . $amount . ' >= total + (packs * CustomerPackCost) THEN "Y" ELSE "N" END'),
-                'payment_adjustment_type' => 'bill_to_bill'
-            ]);
-    }
-
-    /**
-     * Update target supplier bill
-     */
-    private function updateTargetSupplierBill($supplierCode, $billNo, $amount)
-    {
-        Sale::where('supplier_code', $supplierCode)
-            ->where('supplier_bill_no', $billNo)
-            ->where('supplier_bill_printed', 'Y')
-            ->update([
-                'supplier_paid_amount' => DB::raw('COALESCE(supplier_paid_amount, 0) + ' . $amount),
-                'supplier_paid_status' => 'Y'
-            ]);
-    }
-
-    /**
-     * Get all banks
-     */
-    public function getBanks(): JsonResponse
-    {
-        try {
-            $banks = Bank::all(['id', 'bank_name', 'branch', 'account_no']);
-            return response()->json([
-                'success' => true,
-                'data' => $banks
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch banks'
-            ], 500);
-        }
     }
 
     /**
@@ -595,89 +1087,6 @@ class SupplierLoanController extends Controller
     }
 
     /**
-     * Find loan by code and bill number
-     */
-    public function findLoan(Request $request): JsonResponse
-    {
-        $code = $request->query('code');
-        $billNo = $request->query('bill_no');
-
-        $loan = SupplierLoan::where('code', $code)
-            ->where('bill_no', $billNo)
-            ->first();
-
-        if (!$loan) {
-            return response()->json(['message' => 'Not found'], 404);
-        }
-
-        return response()->json($loan);
-    }
-
-    /**
-     * Delete loan record
-     */
-    public function deleteLoanRecord(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'code' => 'required|string',
-            'bill_no' => 'nullable|string',
-        ]);
-
-        DB::beginTransaction();
-
-        try {
-
-            // Find supplier loan record
-            $loanRecord = SupplierLoan::where('code', $validated['code'])
-                ->where('bill_no', $validated['bill_no'])
-                ->first();
-
-            if (!$loanRecord) {
-                DB::rollback();
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Loan record not found.'
-                ], 404);
-            }
-
-            // Find matching creditor record
-            $creditor = Creditor::where('bill_no', trim($loanRecord->bill_no))
-                ->where('supplier_code', trim($validated['code']))
-                ->first();
-
-            // Permanently delete creditor record if exists
-            if ($creditor) {
-                $creditor->forceDelete();
-            }
-
-            // Permanently delete supplier loan record
-            $loanRecord->forceDelete();
-
-            // Clear Creditor_no from sales table
-            Sale::where('supplier_code', $validated['code'])
-                ->where('supplier_bill_no', $validated['bill_no'])
-                ->update([
-                    'loan_taken' => null,
-                    'Creditor_no' => null
-                ]);
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Loan and creditor records permanently deleted successfully.'
-            ], 200);
-
-        } catch (\Exception $e) {
-            DB::rollback();
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to delete record: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
      * Get all supplier codes
      */
     public function getAllCodes(): JsonResponse
@@ -685,510 +1094,6 @@ class SupplierLoanController extends Controller
         return response()->json(Supplier::select('id', 'code', 'name')->get());
     }
 
-    /**
-     * Get farmer full report
-     */
-    public function getFarmerFullReport(Request $request): JsonResponse
-    {
-        $code = $request->query('code');
-        $supplier = Supplier::where('code', $code)->first();
-
-        if (!$supplier) {
-            return response()->json(['success' => false], 404);
-        }
-
-        $loans = SupplierLoan::where('code', $code)->orderBy('created_at', 'desc')->get();
-        $sales = Sale::where('supplier_code', $code)->orderBy('Date', 'desc')->get();
-
-        return response()->json([
-            'success' => true,
-            'profile' => $supplier,
-            'loans' => $loans,
-            'sales' => $sales
-        ]);
-    }
-
-    /**
-     * Get loan summary
-     */
-    public function getLoanSummary(): JsonResponse
-    {
-        try {
-            $loans = DB::table('supplier_loans')
-                ->select('code as supplier_code', 'bill_no as supplier_bill_no', 'loan_amount', 'total_amount', 'type', 'payment_details', 'created_at', 'Creditor_no')
-                ->orderBy('created_at', 'desc')
-                ->get();
-
-            return response()->json([
-                'success' => true,
-                'data' => $loans
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch loan summary'
-            ], 500);
-        }
-    }
-
-    /**
-     * Get supplier bill status summary
-     */
-    public function getSupplierBillStatusSummary2(): JsonResponse
-    {
-        try {
-            $printedBills = DB::table('sales')
-                ->leftJoin('supplier_loans', function ($join) {
-                    $join->on('sales.supplier_code', '=', 'supplier_loans.code')
-                        ->on('sales.supplier_bill_no', '=', 'supplier_loans.bill_no');
-                })
-                ->select('sales.supplier_code', 'sales.supplier_bill_no')
-                ->where('sales.supplier_bill_printed', 'Y')
-                ->whereNotNull('sales.supplier_bill_no')
-                ->where(function ($q) {
-                    $q->whereNull('supplier_loans.id')
-                        ->orWhere('supplier_loans.total_amount', '>', 0);
-                })
-                ->groupBy('sales.supplier_code', 'sales.supplier_bill_no')
-                ->get()
-                ->map(function ($item) {
-                    return [
-                        'supplier_code' => $item->supplier_code,
-                        'supplier_bill_no' => $item->supplier_bill_no
-                    ];
-                });
-
-            $paidBills = SupplierLoan::select('code as supplier_code', 'bill_no as supplier_bill_no', 'Creditor_no')
-                ->whereNotNull('bill_no')
-                ->where('total_amount', '<=', 0)
-                ->orderBy('created_at', 'desc')
-                ->get()
-                ->map(function ($item) {
-                    return [
-                        'supplier_code' => $item->supplier_code,
-                        'supplier_bill_no' => $item->supplier_bill_no,
-                        'creditor_no' => $item->Creditor_no
-                    ];
-                });
-
-            return response()->json([
-                'printed' => $printedBills,
-                'unprinted' => $paidBills
-            ]);
-        } catch (\Exception $e) {
-            Log::error('Error in getSupplierBillStatusSummary2: ' . $e->getMessage());
-            return response()->json([
-                'printed' => [],
-                'unprinted' => []
-            ]);
-        }
-    }
-
-    /**
-     * Get payment history
-     */
-    public function getPaymentHistory(Request $request): JsonResponse
-    {
-        $code = $request->query('code');
-        $billNo = $request->query('bill_no');
-
-        try {
-            $loan = SupplierLoan::where('code', $code)
-                ->where('bill_no', $billNo)
-                ->first();
-
-            if (!$loan) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No payment records found'
-                ], 404);
-            }
-
-            $paymentDetails = $loan->payment_details;
-            if (is_string($paymentDetails)) {
-                $paymentDetails = json_decode($paymentDetails, true);
-            }
-            if (!is_array($paymentDetails)) {
-                $paymentDetails = [];
-            }
-
-            return response()->json([
-                'success' => true,
-                'data' => [
-                    'total_paid' => floatval($loan->loan_amount),
-                    'remaining_balance' => floatval($loan->total_amount),
-                    'payments' => $paymentDetails,
-                    'payment_methods' => $loan->type,
-                    'creditor_no' => $loan->Creditor_no
-                ]
-            ]);
-        } catch (\Exception $e) {
-            Log::error('Payment History Error: ' . $e->getMessage());
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch payment history'
-            ], 500);
-        }
-    }
-
-    /**
-     * Get payment collection report
-     */
-    public function getPaymentCollectionReport(Request $request): JsonResponse
-    {
-        try {
-            $startDate = $request->query('start_date');
-            $endDate = $request->query('end_date');
-
-            // Build the query
-            $query = SupplierLoan::query();
-
-            // Apply date filters
-            if ($startDate) {
-                $query->whereDate('Date', '>=', $startDate);
-            }
-            if ($endDate) {
-                $query->whereDate('Date', '<=', $endDate);
-            }
-
-            // Get all loans with their supplier info
-            $loans = $query->with('supplier')->orderBy('Date', 'desc')->get();
-
-            // Group and calculate totals by bill number
-            $reportData = [];
-            $totals = [
-                'cash_collection' => 0,
-                'cheques_collection' => 0,
-                'bag_box_total' => 0,
-                'bag_total' => 0,
-                'box_total' => 0,
-                'banks_transfer' => 0,
-                'bad_debt' => 0,
-                'total_collection' => 0
-            ];
-
-            foreach ($loans as $loan) {
-                $billNo = $loan->bill_no ?? 'N/A';
-                $supplierCode = $loan->code;
-                $supplierName = $loan->supplier ? $loan->supplier->name : 'Unknown';
-                $displayBillNo = $billNo !== 'N/A' ? "{$supplierCode} - {$billNo}" : $supplierCode;
-
-                if (!isset($reportData[$billNo])) {
-                    $reportData[$billNo] = [
-                        'customer_bill_no' => $displayBillNo,
-                        'supplier_code' => $supplierCode,
-                        'supplier_name' => $supplierName,
-                        'bill_no' => $billNo,
-                        'cash_collection' => 0,
-                        'cheques_collection' => 0,
-                        'bag_box_total' => 0,
-                        'bag_total' => 0,
-                        'box_total' => 0,
-                        'banks_transfer' => 0,
-                        'bad_debt' => 0,
-                        'total_paid' => 0,
-                        'date' => $loan->Date,
-                        'payment_methods' => [],
-                        'payment_details' => [],
-                        'creditor_no' => $loan->Creditor_no
-                    ];
-                }
-
-                // Calculate based on payment type
-                $amount = floatval($loan->loan_amount);
-
-                switch ($loan->type) {
-                    case 'Cash':
-                        $reportData[$billNo]['cash_collection'] += $amount;
-                        $totals['cash_collection'] += $amount;
-                        $reportData[$billNo]['payment_methods'][] = 'Cash';
-                        break;
-
-                    case 'Cheque':
-                        $reportData[$billNo]['cheques_collection'] += $amount;
-                        $totals['cheques_collection'] += $amount;
-                        $reportData[$billNo]['payment_methods'][] = 'Cheque';
-                        $reportData[$billNo]['cheque_details'] = [
-                            'bank_name' => $loan->bank_name,
-                            'cheque_no' => $loan->cheque_no,
-                            'realized_date' => $loan->realized_date
-                        ];
-                        break;
-
-                    case 'Bank Transfer':
-                        $reportData[$billNo]['banks_transfer'] += $amount;
-                        $totals['banks_transfer'] += $amount;
-                        $reportData[$billNo]['payment_methods'][] = 'Bank Transfer';
-                        $reportData[$billNo]['transfer_details'] = [
-                            'bank_name' => $loan->bank_name,
-                            'reference_no' => $loan->transfer_reference_no,
-                            'transfer_date' => $loan->transfer_date
-                        ];
-                        break;
-
-                    case 'bag_to_box':
-                        $bagCount = intval($loan->bag_count);
-                        $bagValue = floatval($loan->bag_value);
-                        $boxCount = intval($loan->box_count);
-                        $boxValue = floatval($loan->box_value);
-                        $bagTotal = $bagCount * $bagValue;
-                        $boxTotal = $boxCount * $boxValue;
-
-                        $reportData[$billNo]['bag_box_total'] += $amount;
-                        $reportData[$billNo]['bag_total'] += $bagCount;
-                        $reportData[$billNo]['box_total'] += $boxCount;
-                        $totals['bag_box_total'] += $amount;
-                        $totals['bag_total'] += $bagCount;
-                        $totals['box_total'] += $boxCount;
-                        $reportData[$billNo]['payment_methods'][] = 'Bag to Box';
-                        break;
-
-                    case 'bill_to_bill':
-                        $reportData[$billNo]['cash_collection'] += $amount; // Treat as credit adjustment
-                        $totals['cash_collection'] += $amount;
-                        $reportData[$billNo]['payment_methods'][] = 'Bill to Bill';
-                        $reportData[$billNo]['bill_to_bill_details'] = [
-                            'target_customer' => $loan->target_customer_code,
-                            'target_bill' => $loan->target_bill_no,
-                            'target_supplier' => $loan->target_supplier_code
-                        ];
-                        break;
-
-                    case 'bad_debt':
-                        $reportData[$billNo]['bad_debt'] += $amount;
-                        $totals['bad_debt'] += $amount;
-                        $reportData[$billNo]['payment_methods'][] = 'Bad Debt';
-                        $reportData[$billNo]['bad_debt_details'] = [
-                            'name' => $loan->bad_debt_name,
-                            'amount' => $loan->bad_debt_amount
-                        ];
-                        break;
-                }
-
-                $reportData[$billNo]['total_paid'] += $amount;
-                $reportData[$billNo]['date'] = $loan->Date;
-
-                // Add payment details
-                if ($loan->payment_details) {
-                    $reportData[$billNo]['payment_details'] = array_merge(
-                        $reportData[$billNo]['payment_details'],
-                        is_array($loan->payment_details) ? $loan->payment_details : json_decode($loan->payment_details, true) ?? []
-                    );
-                }
-            }
-
-            $totals['total_collection'] = array_sum([
-                $totals['cash_collection'],
-                $totals['cheques_collection'],
-                $totals['bag_box_total'],
-                $totals['banks_transfer'],
-                $totals['bad_debt']
-            ]);
-
-            // Convert to array and sort by date
-            $reportArray = array_values($reportData);
-            usort($reportArray, function ($a, $b) {
-                return strtotime($b['date']) - strtotime($a['date']);
-            });
-
-            return response()->json([
-                'success' => true,
-                'data' => $reportArray,
-                'totals' => $totals,
-                'filters' => [
-                    'start_date' => $startDate,
-                    'end_date' => $endDate
-                ]
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('Payment Collection Report Error: ' . $e->getMessage());
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch payment collection report',
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Get payment details by bill number
-     */
-    public function getPaymentDetailsByBill(Request $request): JsonResponse
-    {
-        $billNo = $request->query('bill_no');
-        $code = $request->query('code');
-
-        try {
-            $query = SupplierLoan::where('bill_no', $billNo);
-            if ($code) {
-                $query->where('code', $code);
-            }
-
-            $payments = $query->orderBy('created_at', 'desc')->get();
-
-            return response()->json([
-                'success' => true,
-                'data' => $payments
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch payment details'
-            ], 500);
-        }
-    }
-
-    /**
-     * Get supplier bill details for a specific bill
-     */
-    public function getSupplierBillDetails($billNo, Request $request): JsonResponse
-    {
-        try {
-            $supplierCode = $request->query('supplier_code');
-
-            $sales = Sale::where('supplier_bill_no', $billNo)
-                ->where('supplier_code', $supplierCode)
-                ->where('supplier_bill_printed', 'Y')
-                ->get();
-
-            if ($sales->isEmpty()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No sales found for this bill'
-                ], 404);
-            }
-
-            return response()->json($sales);
-
-        } catch (\Exception $e) {
-            Log::error('Error fetching supplier bill details: ' . $e->getMessage());
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch bill details'
-            ], 500);
-        }
-    }
-
-    /**
-     * Get unprinted supplier details (pending loans)
-     */
-    public function getUnprintedDetails($supplierCode, Request $request): JsonResponse
-    {
-        try {
-            $sales = Sale::where('supplier_code', $supplierCode)
-                ->where(function ($q) {
-                    $q->where('supplier_bill_printed', 'N')
-                        ->orWhereNull('supplier_bill_printed');
-                })
-                ->where('bill_printed', 'Y')
-                ->get();
-
-            if ($sales->isEmpty()) {
-                return response()->json([
-                    'success' => false,
-                ], 404);
-            }
-
-            return response()->json($sales);
-
-        } catch (\Exception $e) {
-            Log::error('Error fetching unprinted details: ' . $e->getMessage());
-            return response()->json([
-                'success' => false
-            ], 500);
-        }
-    }
-
-    /**
-     * Get supplier bill status summary (for left and right panels)
-     */
-    public function getSupplierLoansSummary(): JsonResponse
-    {
-        try {
-            // Get all printed bills
-            $allPrintedBills = DB::table('sales')
-                ->select('supplier_code', 'supplier_bill_no')
-                ->whereNotNull('supplier_code')
-                ->where('supplier_bill_printed', 'Y')
-                ->whereNotNull('supplier_bill_no')
-                ->groupBy('supplier_code', 'supplier_bill_no')
-                ->get()
-                ->map(function ($item) {
-                    return [
-                        'supplier_code' => $item->supplier_code,
-                        'supplier_bill_no' => $item->supplier_bill_no
-                    ];
-                });
-
-            // Get ALL loans (not just active ones)
-            $allLoans = SupplierLoan::select('code', 'bill_no', 'loan_amount', 'total_amount', 'Creditor_no')
-                ->get()
-                ->keyBy(function ($item) {
-                    return $item->code . '-' . $item->bill_no;
-                });
-
-            // Separate: Pending = have loans with total_amount > 0 (remaining balance)
-            $pendingBills = [];
-            $completedBills = [];
-
-            foreach ($allPrintedBills as $bill) {
-                $key = $bill['supplier_code'] . '-' . $bill['supplier_bill_no'];
-                if (isset($allLoans[$key])) {
-                    // Has loan record
-                    $remainingAmount = $allLoans[$key]->total_amount;
-                    if ($remainingAmount > 0) {
-                        // Still has remaining balance - NOT SETTLED
-                        $pendingBills[] = [
-                            'supplier_code' => $bill['supplier_code'],
-                            'supplier_bill_no' => $bill['supplier_bill_no'],
-                            'loan_amount' => $allLoans[$key]->loan_amount,
-                            'total_amount' => $remainingAmount,
-                            'creditor_no' => $allLoans[$key]->Creditor_no
-                        ];
-                    } else {
-                        // Fully paid - FULLY SETTLED
-                        $completedBills[] = [
-                            'supplier_code' => $bill['supplier_code'],
-                            'supplier_bill_no' => $bill['supplier_bill_no'],
-                            'creditor_no' => $allLoans[$key]->Creditor_no
-                        ];
-                    }
-                } else {
-                    // No loan record - means never paid, treat as pending with full amount
-                    // Get total payable from sales
-                    $totalPayable = DB::table('sales')
-                        ->where('supplier_code', $bill['supplier_code'])
-                        ->where('supplier_bill_no', $bill['supplier_bill_no'])
-                        ->where('supplier_bill_printed', 'Y')
-                        ->sum('SupplierTotal');
-
-                    $pendingBills[] = [
-                        'supplier_code' => $bill['supplier_code'],
-                        'supplier_bill_no' => $bill['supplier_bill_no'],
-                        'loan_amount' => 0,
-                        'total_amount' => floatval($totalPayable),
-                        'creditor_no' => null
-                    ];
-                }
-            }
-
-            // IMPORTANT: 
-            // 'printed' = FULLY SETTLED (complete)
-            // 'unprinted' = NOT SETTLED (pending/partial)
-            return response()->json([
-                'printed' => $completedBills,    // Fully settled
-                'unprinted' => $pendingBills      // Not settled
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('Error in getSupplierLoansSummary: ' . $e->getMessage());
-            return response()->json([
-                'printed' => [],
-                'unprinted' => []
-            ]);
-        }
-    }
     /**
      * Get suppliers by first letter of code (only those with Creditor = 'Y')
      */
