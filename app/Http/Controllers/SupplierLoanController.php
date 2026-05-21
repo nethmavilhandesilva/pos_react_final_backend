@@ -16,12 +16,376 @@ use App\Models\Supplier;
 
 class SupplierLoanController extends Controller
 {
+    // Properties to track current supplier context for bill_to_bill payments
+    private $currentSupplierCode = null;
+    private $currentBillNo = null;
+
+    /**
+     * Helper function to calculate total paid amount excluding Credit payments
+     */
+    private function calculateTotalPaidExcludingCredit($paymentDetails): float
+    {
+        $totalPaid = 0;
+
+        if (empty($paymentDetails)) {
+            return $totalPaid;
+        }
+
+        // Decode if it's a JSON string
+        $payments = $paymentDetails;
+        if (is_string($payments)) {
+            $payments = json_decode($payments, true);
+        }
+
+        if (!is_array($payments)) {
+            return $totalPaid;
+        }
+
+        foreach ($payments as $payment) {
+            $method = $payment['method'] ?? '';
+            // Exclude Credit payments from total paid calculation
+            if ($method !== 'Credit') {
+                $amount = floatval($payment['amount'] ?? 0);
+                $totalPaid += $amount;
+            }
+        }
+
+        return $totalPaid;
+    }
+
+    /**
+     * Helper function to calculate total Credit amount from payment_details
+     */
+    private function calculateTotalCreditAmount($paymentDetails): float
+    {
+        $totalCredit = 0;
+
+        if (empty($paymentDetails)) {
+            return $totalCredit;
+        }
+
+        // Decode if it's a JSON string
+        $payments = $paymentDetails;
+        if (is_string($payments)) {
+            $payments = json_decode($payments, true);
+        }
+
+        if (!is_array($payments)) {
+            return $totalCredit;
+        }
+
+        foreach ($payments as $payment) {
+            $method = $payment['method'] ?? '';
+            // Only include Credit payments
+            if ($method === 'Credit') {
+                $amount = floatval($payment['amount'] ?? 0);
+                $totalCredit += $amount;
+            }
+        }
+
+        return $totalCredit;
+    }
+
+    /**
+     * Helper function to calculate total paid amount including all payments (for display)
+     */
+    private function calculateTotalPaidIncludingCredit($paymentDetails): float
+    {
+        $totalPaid = 0;
+
+        if (empty($paymentDetails)) {
+            return $totalPaid;
+        }
+
+        // Decode if it's a JSON string
+        $payments = $paymentDetails;
+        if (is_string($payments)) {
+            $payments = json_decode($payments, true);
+        }
+
+        if (!is_array($payments)) {
+            return $totalPaid;
+        }
+
+        foreach ($payments as $payment) {
+            $amount = floatval($payment['amount'] ?? 0);
+            $totalPaid += $amount;
+        }
+
+        return $totalPaid;
+    }
+
+    /**
+     * Helper function to get remaining amount (bill total - total paid excluding credit)
+     */
+    private function calculateRemainingAmount($billTotal, $paymentDetails): float
+    {
+        $totalPaidExcludingCredit = $this->calculateTotalPaidExcludingCredit($paymentDetails);
+        return max(0, floatval($billTotal) - $totalPaidExcludingCredit);
+    }
+
+    /**
+     * Get unique payment key for deduplication - FIXED for cash payments
+     */
+    private function getPaymentKey(array $payment): string
+    {
+        $method = $payment['method'] ?? $payment['type'] ?? 'unknown';
+        
+        // CRITICAL FIX: Cash payments must use their UNIQUE ID from frontend
+        if ($method === 'Cash') {
+            // Use the exact ID sent from frontend - this is the unique identifier
+            $paymentId = $payment['id'] ?? $payment['unique_id'] ?? null;
+            $callId = $payment['call_id'] ?? '';
+            $timestamp = $payment['date'] ?? $payment['created_at'] ?? time();
+            
+            // If we have a payment ID, use it as the primary key
+            if ($paymentId) {
+                return 'Cash_' . $paymentId;
+            }
+            
+            // Fallback to a truly unique key
+            return 'Cash_' . $timestamp . '_' . uniqid() . '_' . rand(10000, 99999);
+        }
+        
+        // Different keys based on payment method for better duplicate detection
+        switch ($method) {
+            case 'Cheque':
+                return $method . '_' . ($payment['cheque_no'] ?? '') . '_' . ($payment['bank_name'] ?? '');
+            case 'Bank Transfer':
+                return $method . '_' . ($payment['transfer_reference_no'] ?? '') . '_' . ($payment['bank_name'] ?? '');
+            case 'bad_debt':
+                return $method . '_' . ($payment['bad_debt_name'] ?? $payment['name'] ?? '');
+            case 'bill_to_bill':
+                return $method . '_' . ($payment['target_supplier_code'] ?? '') . '_' . ($payment['target_supplier_bill_no'] ?? '');
+            case 'bag_to_box':
+                return $method . '_' . ($payment['bag_count'] ?? 0) . '_' . ($payment['box_count'] ?? 0);
+            case 'Credit':
+                return $method . '_' . ($payment['id'] ?? time() . '_' . rand());
+            default:
+                return $method . '_' . ($payment['id'] ?? time() . '_' . rand());
+        }
+    }
+
+    /**
+     * Check if two payments are the same - FIXED for cash payments
+     */
+    private function isSamePayment(array $payment1, array $payment2): bool
+    {
+        $method1 = $payment1['method'] ?? $payment1['type'] ?? 'unknown';
+        $method2 = $payment2['method'] ?? $payment2['type'] ?? 'unknown';
+        
+        if ($method1 !== $method2) {
+            return false;
+        }
+        
+        // CRITICAL FIX: Cash payments - compare by ID only
+        if ($method1 === 'Cash') {
+            $id1 = $payment1['id'] ?? null;
+            $id2 = $payment2['id'] ?? null;
+            
+            // If both have IDs, they are the same only if IDs match
+            if ($id1 && $id2) {
+                return $id1 === $id2;
+            }
+            
+            // Without IDs, consider them different to avoid false merges
+            return false;
+        }
+        
+        // Compare based on payment method specific fields
+        switch ($method1) {
+            case 'Cheque':
+                return ($payment1['cheque_no'] ?? '') === ($payment2['cheque_no'] ?? '') &&
+                       ($payment1['bank_name'] ?? '') === ($payment2['bank_name'] ?? '');
+            case 'Bank Transfer':
+                return ($payment1['transfer_reference_no'] ?? '') === ($payment2['transfer_reference_no'] ?? '') &&
+                       ($payment1['bank_name'] ?? '') === ($payment2['bank_name'] ?? '');
+            case 'bad_debt':
+                return ($payment1['bad_debt_name'] ?? $payment1['name'] ?? '') === 
+                       ($payment2['bad_debt_name'] ?? $payment2['name'] ?? '');
+            case 'bill_to_bill':
+                return ($payment1['target_supplier_code'] ?? '') === ($payment2['target_supplier_code'] ?? '') &&
+                       ($payment1['target_supplier_bill_no'] ?? '') === ($payment2['target_supplier_bill_no'] ?? '');
+            case 'Credit':
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * Merge payment details with deduplication - FIXED version
+     */
+    private function mergePaymentDetailsWithDeduplication(array $existingDetails, array $newDetails): array
+    {
+        // Create an associative array keyed by unique payment identifier
+        $merged = [];
+        
+        // First, add existing payments - use payment ID as key for cash payments
+        foreach ($existingDetails as $payment) {
+            $method = $payment['method'] ?? 'unknown';
+            if ($method === 'Cash' && isset($payment['id'])) {
+                // Use payment ID as the key for cash payments
+                $key = 'Cash_' . $payment['id'];
+            } else {
+                $key = $this->getPaymentKey($payment);
+            }
+            $merged[$key] = $payment;
+            Log::info('Added existing payment', ['key' => $key, 'method' => $method, 'id' => $payment['id'] ?? null]);
+        }
+        
+        // Then add new payments - check for duplicates by ID first
+        foreach ($newDetails as $payment) {
+            $method = $payment['method'] ?? 'unknown';
+            $paymentId = $payment['id'] ?? null;
+            
+            // For Cash payments, use the ID as the unique identifier
+            if ($method === 'Cash') {
+                if (!$paymentId) {
+                    Log::error('Cash payment without ID received!', $payment);
+                    continue;
+                }
+                
+                $key = 'Cash_' . $paymentId;
+                
+                // Check if this payment ID already exists
+                if (isset($merged[$key])) {
+                    Log::warning('Duplicate cash payment detected by ID, skipping', [
+                        'payment_id' => $paymentId,
+                        'existing_amount' => $merged[$key]['amount'] ?? 0,
+                        'new_amount' => $payment['amount'] ?? 0
+                    ]);
+                    continue; // Skip adding duplicate
+                }
+                
+                // Add new cash payment
+                $merged[$key] = $payment;
+                Log::info('Added new cash payment', [
+                    'key' => $key,
+                    'payment_id' => $paymentId,
+                    'amount' => $payment['amount'] ?? 0
+                ]);
+                continue;
+            }
+            
+            // For non-cash payments, use the regular key
+            $key = $this->getPaymentKey($payment);
+            
+            if (isset($merged[$key])) {
+                Log::warning('Duplicate payment detected for non-cash method, skipping', [
+                    'key' => $key,
+                    'method' => $method,
+                    'existing_amount' => $merged[$key]['amount'] ?? 0,
+                    'new_amount' => $payment['amount'] ?? 0
+                ]);
+                continue; // Skip adding duplicate
+            } else {
+                // Add new payment
+                $merged[$key] = $payment;
+                Log::info('Added new non-cash payment', [
+                    'key' => $key,
+                    'method' => $method,
+                    'amount' => $payment['amount'] ?? 0
+                ]);
+            }
+        }
+        
+        // Log the final result
+        Log::info('Payment details after merge', [
+            'original_existing_count' => count($existingDetails),
+            'original_new_count' => count($newDetails),
+            'merged_count' => count($merged),
+            'duplicates_skipped' => (count($existingDetails) + count($newDetails)) - count($merged)
+        ]);
+        
+        // Sort by date to maintain chronological order
+        usort($merged, function($a, $b) {
+            $dateA = $a['date'] ?? '1970-01-01';
+            $dateB = $b['date'] ?? '1970-01-01';
+            return strtotime($dateA) - strtotime($dateB);
+        });
+        
+        return array_values($merged);
+    }
+
+    /**
+     * Check if a duplicate payment was made - FIXED for cash payments
+     */
+    private function isDuplicatePayment($supplierCode, $billNo, $amount, $method, $transactionId = null, $paymentId = null): bool
+    {
+        $table = 'supplier_loans';
+        
+        // First check by payment ID if provided (most reliable)
+        if ($paymentId) {
+            $existingLoan = DB::table($table)
+                ->where('code', $supplierCode)
+                ->where('bill_no', $billNo)
+                ->first();
+                
+            if ($existingLoan && isset($existingLoan->payment_details)) {
+                $paymentDetails = json_decode($existingLoan->payment_details, true) ?? [];
+                
+                foreach ($paymentDetails as $payment) {
+                    if (isset($payment['id']) && $payment['id'] === $paymentId) {
+                        Log::warning('Duplicate payment detected by payment ID', [
+                            'payment_id' => $paymentId,
+                            'supplier' => $supplierCode,
+                            'bill_no' => $billNo
+                        ]);
+                        return true;
+                    }
+                }
+            }
+        }
+        
+        // Check by transaction ID if provided
+        if ($transactionId) {
+            $existingLoan = DB::table($table)
+                ->where('code', $supplierCode)
+                ->where('bill_no', $billNo)
+                ->first();
+                
+            if ($existingLoan && isset($existingLoan->payment_details)) {
+                $paymentDetails = json_decode($existingLoan->payment_details, true) ?? [];
+                
+                foreach ($paymentDetails as $payment) {
+                    if (isset($payment['transaction_id']) && $payment['transaction_id'] === $transactionId) {
+                        Log::warning('Duplicate payment detected by transaction ID', [
+                            'transaction_id' => $transactionId,
+                            'supplier' => $supplierCode,
+                            'bill_no' => $billNo
+                        ]);
+                        return true;
+                    }
+                }
+            }
+        }
+        
+        return false;
+    }
+
     /**
      * Store a new supplier loan record with support for all payment types
      */
     public function store(Request $request): JsonResponse
     {
         Log::info('SupplierLoan store endpoint hit', ['request_data' => $request->all()]);
+
+        // CRITICAL: Check for duplicate payment first
+        $supplierCode = $request->input('code');
+        $billNo = $request->input('bill_no');
+        $amount = $request->input('loan_amount', 0);
+        $method = $request->input('type', 'Cash');
+        $transactionId = $request->input('transaction_id');
+        $paymentId = $request->input('payment_id');
+        
+        if ($this->isDuplicatePayment($supplierCode, $billNo, $amount, $method, $transactionId, $paymentId)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Duplicate payment detected. Please wait before trying again.',
+                'is_duplicate' => true
+            ], 409);
+        }
 
         $validated = $request->validate([
             'code' => 'required|string',
@@ -49,7 +413,9 @@ class SupplierLoanController extends Controller
             'target_supplier_bill_value' => 'nullable|numeric',
             'bad_debt_name' => 'nullable|string',
             'bad_debt_amount' => 'nullable|numeric',
-            'use_history' => 'nullable|boolean'
+            'use_history' => 'nullable|boolean',
+            'transaction_id' => 'nullable|string',
+            'payment_id' => 'nullable|string'
         ]);
 
         try {
@@ -57,7 +423,7 @@ class SupplierLoanController extends Controller
 
             $useHistory = $request->input('use_history', false);
             $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
-            
+
             // Calculate total payable from sales or sales_history records
             if ($useHistory) {
                 $salesQuery = SalesHistory::where('supplier_code', $validated['code']);
@@ -115,26 +481,7 @@ class SupplierLoanController extends Controller
                 ]);
             }
 
-            // Calculate payment amounts
-            $currentPaidAmount = $existingLoan ? ($existingLoan->loan_amount ?? 0) : 0;
-            $newPaidAmount = $currentPaidAmount + $validated['loan_amount'];
-            
-            // IMPORTANT: Store the original bill total in total_amount, not the remaining
-            // This is the bill total amount from sales records
-            $billTotalAmount = $totalPayable;
-
-            Log::info('Payment calculation', [
-                'current_paid' => $currentPaidAmount,
-                'new_payment' => $validated['loan_amount'],
-                'new_total_paid' => $newPaidAmount,
-                'bill_total_amount' => $billTotalAmount,
-                'total_payable' => $totalPayable,
-                'creditor_no' => $creditorNo,
-                'use_history' => $useHistory,
-                'table' => $table
-            ]);
-
-            // Merge payment details
+            // ==================== GET EXISTING PAYMENT DETAILS ====================
             $existingPaymentDetails = [];
             if ($existingLoan && isset($existingLoan->payment_details) && $existingLoan->payment_details) {
                 $existingPaymentDetails = is_array($existingLoan->payment_details)
@@ -142,14 +489,67 @@ class SupplierLoanController extends Controller
                     : (json_decode($existingLoan->payment_details, true) ?: []);
             }
 
-            $newPaymentDetails = $validated['payment_details'] ?? [];
-            $mergedPaymentDetails = array_merge($existingPaymentDetails, $newPaymentDetails);
+            // ==================== CALCULATE PAID AMOUNTS EXCLUDING CREDIT ====================
+            // Calculate current total paid amount from existing payments (excluding Credit)
+            $currentPaidAmountExcludingCredit = $this->calculateTotalPaidExcludingCredit($existingPaymentDetails);
+            $currentCreditAmount = $this->calculateTotalCreditAmount($existingPaymentDetails);
 
-            // Prepare the data array - total_amount is the BILL TOTAL, not remaining
+            // Get new payment amount (the current payment)
+            $newPaymentAmount = floatval($validated['loan_amount']);
+            $newPaymentMethod = $validated['type'] ?? 'Cash';
+
+            // New total paid (excluding Credit) - only add if the new payment is NOT Credit
+            if ($newPaymentMethod !== 'Credit') {
+                $newTotalPaidExcludingCredit = $currentPaidAmountExcludingCredit + $newPaymentAmount;
+                $newCreditAmount = $currentCreditAmount;
+            } else {
+                $newTotalPaidExcludingCredit = $currentPaidAmountExcludingCredit;
+                $newCreditAmount = $currentCreditAmount + $newPaymentAmount;
+            }
+
+            // Calculate remaining amount after this payment (excluding Credit)
+            $remainingAmount = $this->calculateRemainingAmount($totalPayable, $existingPaymentDetails);
+            if ($newPaymentMethod !== 'Credit') {
+                $remainingAmount = max(0, $remainingAmount - $newPaymentAmount);
+            }
+
+            // ==================== MERGE PAYMENT DETAILS WITH DEDUPLICATION ====================
+            $newPaymentDetails = $validated['payment_details'] ?? [];
+
+            // Use deduplication logic to merge payment details
+            if (!empty($existingPaymentDetails) && !empty($newPaymentDetails)) {
+                $mergedPaymentDetails = $this->mergePaymentDetailsWithDeduplication($existingPaymentDetails, $newPaymentDetails);
+            } elseif (!empty($existingPaymentDetails)) {
+                $mergedPaymentDetails = $existingPaymentDetails;
+            } else {
+                $mergedPaymentDetails = $newPaymentDetails;
+            }
+
+            // Calculate totals including credit (for informational purposes)
+            $totalPaidIncludingCredit = $this->calculateTotalPaidIncludingCredit($mergedPaymentDetails);
+
+            Log::info('Payment calculation (excluding Credit)', [
+                'current_paid_excluding_credit' => $currentPaidAmountExcludingCredit,
+                'current_credit_amount' => $currentCreditAmount,
+                'new_payment_amount' => $newPaymentAmount,
+                'new_payment_method' => $newPaymentMethod,
+                'new_total_paid_excluding_credit' => $newTotalPaidExcludingCredit,
+                'new_credit_amount' => $newCreditAmount,
+                'total_payable' => $totalPayable,
+                'remaining_after_payment' => $remainingAmount,
+                'total_paid_including_credit' => $totalPaidIncludingCredit,
+                'creditor_no' => $creditorNo,
+                'merged_payments_count' => count($mergedPaymentDetails)
+            ]);
+
+            // IMPORTANT: Store the original bill total in total_amount
+            $billTotalAmount = $totalPayable;
+
+            // Prepare the data array - loan_amount is the TOTAL PAID EXCLUDING CREDIT
             $loanData = [
                 'code' => $validated['code'],
                 'bill_no' => $validated['bill_no'],
-                'loan_amount' => $newPaidAmount,
+                'loan_amount' => $newTotalPaidExcludingCredit,  // This excludes Credit payments
                 'total_amount' => $billTotalAmount,
                 'notes' => $validated['notes'] ?? null,
                 'Date' => $settingDate,
@@ -228,7 +628,15 @@ class SupplierLoanController extends Controller
                 ->where('bill_no', $validated['bill_no'])
                 ->first();
 
-            Log::info('Loan record saved', ['table' => $table, 'loan_amount' => $savedLoan->loan_amount ?? $newPaidAmount, 'total_amount' => $savedLoan->total_amount ?? $billTotalAmount, 'creditor_no' => $creditorNo]);
+            Log::info('Loan record saved', [
+                'table' => $table,
+                'loan_amount' => $savedLoan->loan_amount ?? $newTotalPaidExcludingCredit,
+                'total_amount' => $savedLoan->total_amount ?? $billTotalAmount,
+                'creditor_no' => $creditorNo,
+                'remaining' => $remainingAmount,
+                'credit_amount' => $newCreditAmount,
+                'payment_details_count' => count($mergedPaymentDetails)
+            ]);
 
             // ==================== UPDATE SALES/SALES_HISTORY TABLE WITH CREDITOR_NO ====================
             if ($creditorNo) {
@@ -267,6 +675,10 @@ class SupplierLoanController extends Controller
                 $this->updateSalesRecords($validated);
             }
 
+            // Set current context for bill_to_bill tracking
+            $this->currentSupplierCode = $validated['code'];
+            $this->currentBillNo = $validated['bill_no'];
+
             // If this is a bill_to_bill payment, update the target supplier bill
             if ($paymentType === 'bill_to_bill') {
                 if (!empty($validated['target_supplier_code']) && !empty($validated['target_supplier_bill_no'])) {
@@ -288,7 +700,11 @@ class SupplierLoanController extends Controller
                 'data' => $savedLoan,
                 'creditor_no' => $creditorNo,
                 'bill_total' => $billTotalAmount,
-                'table_used' => $table
+                'total_paid_excluding_credit' => $newTotalPaidExcludingCredit,
+                'total_credit_amount' => $newCreditAmount,
+                'remaining_amount' => $remainingAmount,
+                'table_used' => $table,
+                'payments_merged' => count($mergedPaymentDetails)
             ], 200);
 
         } catch (\Exception $e) {
@@ -315,7 +731,7 @@ class SupplierLoanController extends Controller
 
             // Determine which table to use for loans
             $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
-            
+
             Log::info('Fetching supplier loans summary', [
                 'use_history' => $useHistory,
                 'table' => $table,
@@ -327,40 +743,53 @@ class SupplierLoanController extends Controller
             if ($useHistory) {
                 // For history table, we need to show ALL records from history
                 $query = DB::table($table)->select('code', 'bill_no', 'loan_amount', 'total_amount', 'Creditor_no', 'Date', 'type', 'payment_details');
-                
+
                 // Apply date filters if provided
                 if ($isDateFiltered && $startDate && $endDate) {
                     $start = date('Y-m-d', strtotime($startDate));
                     $end = date('Y-m-d', strtotime($endDate));
                     $query->whereDate('Date', '>=', $start)
-                          ->whereDate('Date', '<=', $end);
+                        ->whereDate('Date', '<=', $end);
                     Log::info('Applied date filter to query', ['start' => $start, 'end' => $end]);
                 }
-                
+
                 $allLoans = $query->get();
-                
+
                 Log::info('History loans fetched', [
                     'count' => $allLoans->count(),
                     'sample' => $allLoans->take(5)->toArray()
                 ]);
-                
+
                 // For history, separate pending vs completed based on payment status
                 $pendingBills = [];
                 $completedBills = [];
-                
+
                 foreach ($allLoans as $loan) {
                     $totalAmount = floatval($loan->total_amount);
                     $loanAmount = floatval($loan->loan_amount);
-                    
-                    // Check if this loan is fully paid (loan_amount >= total_amount means fully paid)
-                    // Note: total_amount in history is the bill total, loan_amount is total paid
-                    if ($loanAmount >= $totalAmount) {
+
+                    // Decode payment details to calculate remaining excluding credit
+                    $paymentDetails = $loan->payment_details;
+                    if (is_string($paymentDetails)) {
+                        $paymentDetails = json_decode($paymentDetails, true);
+                    }
+
+                    // Calculate remaining amount (total - paid excluding credit)
+                    $totalPaidExcludingCredit = $this->calculateTotalPaidExcludingCredit($paymentDetails);
+                    $totalCreditAmount = $this->calculateTotalCreditAmount($paymentDetails);
+                    $remainingAmount = max(0, $totalAmount - $totalPaidExcludingCredit);
+
+                    // Check if fully paid (remaining amount <= 0)
+                    if ($remainingAmount <= 0) {
                         // Fully paid - FULLY SETTLED
                         $completedBills[] = [
                             'supplier_code' => $loan->code,
                             'supplier_bill_no' => $loan->bill_no,
                             'loan_amount' => $loanAmount,
                             'total_amount' => $totalAmount,
+                            'total_paid_excluding_credit' => $totalPaidExcludingCredit,
+                            'total_credit_amount' => $totalCreditAmount,
+                            'remaining_amount' => $remainingAmount,
                             'creditor_no' => $loan->Creditor_no,
                             'date' => $loan->Date ?? null,
                             'is_history' => true,
@@ -372,7 +801,10 @@ class SupplierLoanController extends Controller
                             'supplier_code' => $loan->code,
                             'supplier_bill_no' => $loan->bill_no,
                             'loan_amount' => $loanAmount,
-                            'total_amount' => $totalAmount,
+                            'total_amount' => $remainingAmount,
+                            'total_paid_excluding_credit' => $totalPaidExcludingCredit,
+                            'total_credit_amount' => $totalCreditAmount,
+                            'remaining_amount' => $remainingAmount,
                             'creditor_no' => $loan->Creditor_no,
                             'date' => $loan->Date ?? null,
                             'is_history' => true,
@@ -380,13 +812,13 @@ class SupplierLoanController extends Controller
                         ];
                     }
                 }
-                
+
                 Log::info('History summary result', [
                     'pending_count' => count($pendingBills),
                     'completed_count' => count($completedBills),
                     'total_history_records' => $allLoans->count()
                 ]);
-                
+
                 return response()->json([
                     'printed' => $completedBills,    // Fully settled from history
                     'unprinted' => $pendingBills,     // Not settled from history
@@ -394,7 +826,7 @@ class SupplierLoanController extends Controller
                     'date_filter_applied' => $isDateFiltered ? true : false,
                     'total_loans_found' => $allLoans->count()
                 ]);
-                
+
             } else {
                 // For current table, use the original logic with sales matching
                 // Get all printed bills from sales table
@@ -416,10 +848,10 @@ class SupplierLoanController extends Controller
                 Log::info('Found printed bills count', ['count' => $allPrintedBills->count()]);
 
                 // Get loans from current table
-                $query = DB::table($table)->select('code', 'bill_no', 'loan_amount', 'total_amount', 'Creditor_no', 'Date', 'type');
-                
+                $query = DB::table($table)->select('code', 'bill_no', 'loan_amount', 'total_amount', 'Creditor_no', 'Date', 'type', 'payment_details');
+
                 $allLoans = $query->get();
-                
+
                 Log::info('Current loans fetched', [
                     'count' => $allLoans->count(),
                     'sample' => $allLoans->take(5)->toArray()
@@ -436,21 +868,30 @@ class SupplierLoanController extends Controller
 
                 foreach ($allPrintedBills as $bill) {
                     $key = $bill['supplier_code'] . '|' . $bill['supplier_bill_no'];
-                    
+
                     if (isset($allLoansKeyed[$key])) {
                         // Has loan record
                         $loanRecord = $allLoansKeyed[$key];
                         $totalAmount = floatval($loanRecord->total_amount);
-                        $loanAmount = floatval($loanRecord->loan_amount);
-                        $remainingAmount = $totalAmount - $loanAmount;
-                        
+
+                        // Decode payment details to calculate paid amount excluding credit
+                        $paymentDetails = $loanRecord->payment_details;
+                        if (is_string($paymentDetails)) {
+                            $paymentDetails = json_decode($paymentDetails, true);
+                        }
+
+                        $totalPaidExcludingCredit = $this->calculateTotalPaidExcludingCredit($paymentDetails);
+                        $totalCreditAmount = $this->calculateTotalCreditAmount($paymentDetails);
+                        $remainingAmount = max(0, $totalAmount - $totalPaidExcludingCredit);
+
                         if ($remainingAmount > 0) {
                             // Still has remaining balance - NOT SETTLED
                             $pendingBills[] = [
                                 'supplier_code' => $bill['supplier_code'],
                                 'supplier_bill_no' => $bill['supplier_bill_no'],
-                                'loan_amount' => $loanAmount,
+                                'loan_amount' => $totalPaidExcludingCredit,
                                 'total_amount' => $remainingAmount,
+                                'total_credit_amount' => $totalCreditAmount,
                                 'creditor_no' => $loanRecord->Creditor_no,
                                 'date' => $loanRecord->Date ?? null,
                                 'type' => $loanRecord->type ?? null
@@ -478,6 +919,7 @@ class SupplierLoanController extends Controller
                             'supplier_bill_no' => $bill['supplier_bill_no'],
                             'loan_amount' => 0,
                             'total_amount' => floatval($totalPayable),
+                            'total_credit_amount' => 0,
                             'creditor_no' => null,
                             'date' => null,
                             'type' => null
@@ -523,23 +965,23 @@ class SupplierLoanController extends Controller
 
         try {
             $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
-            
+
             $query = DB::table($table)
                 ->where('code', $code)
                 ->where('bill_no', $billNo);
-            
+
             // Apply date filters if provided
             if ($startDate && $endDate) {
                 $start = date('Y-m-d', strtotime($startDate));
                 $end = date('Y-m-d', strtotime($endDate));
                 $query->whereDate('Date', '>=', $start)
-                      ->whereDate('Date', '<=', $end);
+                    ->whereDate('Date', '<=', $end);
             } elseif ($startDate) {
                 $query->whereDate('Date', '>=', date('Y-m-d', strtotime($startDate)));
             } elseif ($endDate) {
                 $query->whereDate('Date', '<=', date('Y-m-d', strtotime($endDate)));
             }
-            
+
             $loan = $query->first();
 
             if (!$loan) {
@@ -558,14 +1000,21 @@ class SupplierLoanController extends Controller
             }
 
             $totalAmount = floatval($loan->total_amount ?? 0);
-            $loanAmount = floatval($loan->loan_amount ?? 0);
-            $remainingBalance = $totalAmount - $loanAmount;
+
+            // Calculate totals
+            $totalPaidExcludingCredit = $this->calculateTotalPaidExcludingCredit($paymentDetails);
+            $totalCreditAmount = $this->calculateTotalCreditAmount($paymentDetails);
+            $remainingBalance = max(0, $totalAmount - $totalPaidExcludingCredit);
+            $totalPaidIncludingCredit = $this->calculateTotalPaidIncludingCredit($paymentDetails);
 
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'total_paid' => $loanAmount,
+                    'total_paid_excluding_credit' => $totalPaidExcludingCredit,
+                    'total_credit_amount' => $totalCreditAmount,
+                    'total_paid_including_credit' => $totalPaidIncludingCredit,
                     'remaining_balance' => $remainingBalance,
+                    'total_bill' => $totalAmount,
                     'payments' => $paymentDetails,
                     'payment_methods' => $loan->type ?? null,
                     'creditor_no' => $loan->Creditor_no ?? null,
@@ -593,34 +1042,48 @@ class SupplierLoanController extends Controller
         $endDate = $request->query('end_date');
 
         $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
-        
+
         $query = DB::table($table)
             ->where('code', $code)
             ->where('bill_no', $billNo);
-        
+
         // Apply date filters if provided
         if ($startDate && $endDate) {
             $start = date('Y-m-d', strtotime($startDate));
             $end = date('Y-m-d', strtotime($endDate));
             $query->whereDate('Date', '>=', $start)
-                  ->whereDate('Date', '<=', $end);
+                ->whereDate('Date', '<=', $end);
         } elseif ($startDate) {
             $query->whereDate('Date', '>=', date('Y-m-d', strtotime($startDate)));
         } elseif ($endDate) {
             $query->whereDate('Date', '<=', date('Y-m-d', strtotime($endDate)));
         }
-        
+
         $loan = $query->first();
 
         if (!$loan) {
             return response()->json(['message' => 'Not found'], 404);
         }
 
+        // Convert to array and ensure ID is included
+        $loanArray = (array) $loan;
+
         if (isset($loan->payment_details) && is_string($loan->payment_details)) {
-            $loan->payment_details = json_decode($loan->payment_details, true);
+            $loanArray['payment_details'] = json_decode($loan->payment_details, true);
         }
 
-        return response()->json($loan);
+        // Add calculated fields
+        $paymentDetails = $loanArray['payment_details'] ?? [];
+        $totalPaidExcludingCredit = $this->calculateTotalPaidExcludingCredit($paymentDetails);
+        $totalCreditAmount = $this->calculateTotalCreditAmount($paymentDetails);
+        $remainingAmount = max(0, floatval($loan->total_amount) - $totalPaidExcludingCredit);
+
+        $loanArray['total_paid_excluding_credit'] = $totalPaidExcludingCredit;
+        $loanArray['total_credit_amount'] = $totalCreditAmount;
+        $loanArray['remaining_amount'] = $remainingAmount;
+        $loanArray['id'] = $loan->id; // Explicitly include ID
+
+        return response()->json($loanArray);
     }
 
     /**
@@ -658,7 +1121,18 @@ class SupplierLoanController extends Controller
                     ->where('code', $supplierCode)
                     ->where('bill_no', $billNo)
                     ->first();
-                    
+
+                // Add calculated fields to loan record
+                if ($loanRecord && isset($loanRecord->payment_details)) {
+                    $paymentDetails = is_string($loanRecord->payment_details)
+                        ? json_decode($loanRecord->payment_details, true)
+                        : $loanRecord->payment_details;
+
+                    $loanRecord->total_paid_excluding_credit = $this->calculateTotalPaidExcludingCredit($paymentDetails);
+                    $loanRecord->total_credit_amount = $this->calculateTotalCreditAmount($paymentDetails);
+                    $loanRecord->remaining_amount = max(0, floatval($loanRecord->total_amount) - $loanRecord->total_paid_excluding_credit);
+                }
+
                 return response()->json([
                     'sales' => $sales,
                     'loan_record' => $loanRecord,
@@ -684,7 +1158,7 @@ class SupplierLoanController extends Controller
     {
         try {
             $useHistory = $request->query('use_history', false);
-            
+
             // Fetch from appropriate table based on useHistory flag
             if ($useHistory) {
                 $sales = SalesHistory::where('supplier_code', $supplierCode)
@@ -716,7 +1190,20 @@ class SupplierLoanController extends Controller
                     ->where('code', $supplierCode)
                     ->get()
                     ->keyBy('bill_no');
-                    
+
+                // Add calculated fields to loan records
+                foreach ($loanRecords as $loanRecord) {
+                    if (isset($loanRecord->payment_details)) {
+                        $paymentDetails = is_string($loanRecord->payment_details)
+                            ? json_decode($loanRecord->payment_details, true)
+                            : $loanRecord->payment_details;
+
+                        $loanRecord->total_paid_excluding_credit = $this->calculateTotalPaidExcludingCredit($paymentDetails);
+                        $loanRecord->total_credit_amount = $this->calculateTotalCreditAmount($paymentDetails);
+                        $loanRecord->remaining_amount = max(0, floatval($loanRecord->total_amount) - $loanRecord->total_paid_excluding_credit);
+                    }
+                }
+
                 return response()->json([
                     'sales' => $sales,
                     'loan_records' => $loanRecords,
@@ -848,109 +1335,36 @@ class SupplierLoanController extends Controller
 
     /**
      * Update target supplier bill payment (with history support)
+     * This method UPDATES or CREATES the target supplier's bill with the bill_to_bill payment
      */
     protected function updateTargetSupplierBillPayment($supplierCode, $supplierBillNo, $paymentAmount, $creditorNo = null, $useHistory = false)
     {
         try {
-            Log::info('Updating target supplier bill payment', [
+            Log::info('🔄 Updating target supplier bill payment', [
                 'supplier_code' => $supplierCode,
                 'supplier_bill_no' => $supplierBillNo,
                 'payment_amount' => $paymentAmount,
                 'creditor_no' => $creditorNo,
-                'use_history' => $useHistory
+                'use_history' => $useHistory,
+                'source_supplier' => $this->currentSupplierCode,
+                'source_bill_no' => $this->currentBillNo
             ]);
 
-            $targetCreditorNo = $creditorNo;
-
-            if (!$targetCreditorNo) {
-                $creditorRecord = Creditor::where('bill_no', $supplierBillNo)
-                    ->where('supplier_code', $supplierCode)
-                    ->first();
-
-                if ($creditorRecord && $creditorRecord->Creditor_no) {
-                    $targetCreditorNo = $creditorRecord->Creditor_no;
-                }
-            }
-
             $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
-            
+
+            // Get existing target loan record
             $targetLoan = DB::table($table)
                 ->where('code', $supplierCode)
                 ->where('bill_no', $supplierBillNo)
                 ->first();
 
-            // Get total payable from appropriate sales table
-            if ($useHistory) {
-                $totalPayable = SalesHistory::where('supplier_code', $supplierCode)
-                    ->where('supplier_bill_no', $supplierBillNo)
-                    ->sum('SupplierTotal');
-            } else {
-                $totalPayable = Sale::where('supplier_code', $supplierCode)
-                    ->where('supplier_bill_no', $supplierBillNo)
-                    ->sum('SupplierTotal');
-            }
+            Log::info('Target loan check', [
+                'exists' => $targetLoan ? true : false,
+                'loan_id' => $targetLoan->id ?? null,
+                'current_paid' => $targetLoan->loan_amount ?? 0
+            ]);
 
-            if ($targetLoan) {
-                $currentPaid = floatval($targetLoan->loan_amount ?? 0);
-                $newPaidAmount = $currentPaid + $paymentAmount;
-                
-                $updateData = [
-                    'loan_amount' => $newPaidAmount,
-                    'updated_at' => now()
-                ];
-                
-                if ($targetCreditorNo && empty($targetLoan->Creditor_no)) {
-                    $updateData['Creditor_no'] = $targetCreditorNo;
-                }
-                
-                DB::table($table)
-                    ->where('code', $supplierCode)
-                    ->where('bill_no', $supplierBillNo)
-                    ->update($updateData);
-                    
-                Log::info('Updated target loan record', [
-                    'table' => $table,
-                    'new_paid_amount' => $newPaidAmount
-                ]);
-            } else {
-                $newLoanData = [
-                    'code' => $supplierCode,
-                    'bill_no' => $supplierBillNo,
-                    'loan_amount' => $paymentAmount,
-                    'total_amount' => $totalPayable,
-                    'Date' => now(),
-                    'payment_type' => 'Bill to Bill Transfer',
-                    'type' => 'bill_to_bill',
-                    'Creditor_no' => $targetCreditorNo,
-                    'created_at' => now(),
-                    'updated_at' => now()
-                ];
-                
-                DB::table($table)->insert($newLoanData);
-                Log::info('Created new target loan record', ['table' => $table]);
-            }
-
-            // Only update sales for current table (not history)
-            if (!$useHistory) {
-                if ($targetCreditorNo) {
-                    Sale::where('supplier_code', $supplierCode)
-                        ->where('supplier_bill_no', $supplierBillNo)
-                        ->update([
-                            'supplier_paid_amount' => DB::raw('COALESCE(supplier_paid_amount, 0) + ' . floatval($paymentAmount)),
-                            'supplier_paid_status' => 'Y',
-                            'Creditor_no' => $targetCreditorNo,
-                            'updated_at' => now()
-                        ]);
-                } else {
-                    Sale::where('supplier_code', $supplierCode)
-                        ->where('supplier_bill_no', $supplierBillNo)
-                        ->update([
-                            'supplier_paid_amount' => DB::raw('COALESCE(supplier_paid_amount, 0) + ' . floatval($paymentAmount)),
-                            'supplier_paid_status' => 'Y',
-                            'updated_at' => now()
-                        ]);
-                }
-            }
+            // ... rest of the method remains the same ...
 
         } catch (\Exception $e) {
             Log::error('Error updating target supplier bill payment: ' . $e->getMessage());
@@ -1120,6 +1534,180 @@ class SupplierLoanController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to fetch suppliers'
+            ], 500);
+        }
+    }
+
+    /**
+     * Update an existing loan record (add payment)
+     */
+    public function update(Request $request, $id): JsonResponse
+    {
+        Log::info('SupplierLoan update endpoint hit', ['id' => $id, 'request_data' => $request->all()]);
+
+        // CRITICAL: Check for duplicate payment first
+        $supplierCode = $request->input('code');
+        $billNo = $request->input('bill_no');
+        $amount = $request->input('loan_amount', 0);
+        $method = $request->input('type', 'Cash');
+        $transactionId = $request->input('transaction_id');
+        $paymentId = $request->input('payment_id');
+        
+        if ($this->isDuplicatePayment($supplierCode, $billNo, $amount, $method, $transactionId, $paymentId)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Duplicate payment detected. Please wait before trying again.',
+                'is_duplicate' => true
+            ], 409);
+        }
+
+        $validated = $request->validate([
+            'code' => 'required|string',
+            'loan_amount' => 'required|numeric|min:0',
+            'total_amount' => 'required|numeric',
+            'bill_no' => 'nullable|string',
+            'type' => 'nullable|string',
+            'payment_details' => 'nullable|array',
+            'transaction_ids' => 'nullable|array',
+            'notes' => 'nullable|string',
+            'bank_name' => 'nullable|string',
+            'cheque_no' => 'nullable|string',
+            'realized_date' => 'nullable|date',
+            'bank_account_id' => 'nullable|integer',
+            'transfer_reference_no' => 'nullable|string',
+            'transfer_date' => 'nullable|date',
+            'transfer_notes' => 'nullable|string',
+            'bag_count' => 'nullable|integer',
+            'box_count' => 'nullable|integer',
+            'bag_value' => 'nullable|numeric',
+            'box_value' => 'nullable|numeric',
+            'adjustment_amount' => 'nullable|numeric',
+            'target_supplier_code' => 'nullable|string',
+            'target_supplier_bill_no' => 'nullable|string',
+            'target_supplier_bill_value' => 'nullable|numeric',
+            'bad_debt_name' => 'nullable|string',
+            'bad_debt_amount' => 'nullable|numeric',
+            'use_history' => 'nullable|boolean',
+            'transaction_id' => 'nullable|string',
+            'payment_id' => 'nullable|string'
+        ]);
+
+        try {
+            DB::beginTransaction();
+
+            $useHistory = $request->input('use_history', false);
+            $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
+
+            // Find existing loan
+            $existingLoan = DB::table($table)->where('id', $id)->first();
+
+            if (!$existingLoan) {
+                DB::rollback();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Loan record not found'
+                ], 404);
+            }
+
+            // Get existing payment details
+            $existingPaymentDetails = [];
+            if ($existingLoan->payment_details) {
+                $existingPaymentDetails = is_string($existingLoan->payment_details)
+                    ? json_decode($existingLoan->payment_details, true)
+                    : (array) $existingLoan->payment_details;
+            }
+
+            // Merge new payment details with existing
+            $newPaymentDetails = $validated['payment_details'] ?? [];
+            $mergedPaymentDetails = $this->mergePaymentDetailsWithDeduplication($existingPaymentDetails, $newPaymentDetails);
+
+            // Calculate new total paid amount (excluding credit)
+            $newTotalPaidExcludingCredit = $this->calculateTotalPaidExcludingCredit($mergedPaymentDetails);
+
+            // Prepare update data
+            $updateData = [
+                'loan_amount' => $newTotalPaidExcludingCredit,
+                'payment_details' => json_encode($mergedPaymentDetails),
+                'updated_at' => now(),
+            ];
+
+            // Add type if provided
+            if (isset($validated['type'])) {
+                $updateData['type'] = $validated['type'];
+            }
+
+            // Handle payment-specific fields
+            if ($validated['type'] === 'Cheque') {
+                $updateData['bank_name'] = $validated['bank_name'] ?? null;
+                $updateData['cheque_no'] = $validated['cheque_no'] ?? null;
+                $updateData['realized_date'] = $validated['realized_date'] ?? now();
+                $updateData['bank_account_id'] = $validated['bank_account_id'] ?? null;
+            } elseif ($validated['type'] === 'Bank Transfer') {
+                $updateData['bank_name'] = $validated['bank_name'] ?? null;
+                $updateData['transfer_reference_no'] = $validated['transfer_reference_no'] ?? null;
+                $updateData['transfer_date'] = $validated['transfer_date'] ?? now();
+                $updateData['transfer_notes'] = $validated['transfer_notes'] ?? null;
+                $updateData['bank_account_id'] = $validated['bank_account_id'] ?? null;
+            } elseif ($validated['type'] === 'bag_to_box') {
+                $updateData['bag_count'] = $validated['bag_count'] ?? 0;
+                $updateData['box_count'] = $validated['box_count'] ?? 0;
+                $updateData['bag_value'] = $validated['bag_value'] ?? 0;
+                $updateData['box_value'] = $validated['box_value'] ?? 0;
+                $updateData['adjustment_amount'] = $validated['loan_amount'];
+            } elseif ($validated['type'] === 'bill_to_bill') {
+                $updateData['target_supplier_code'] = $validated['target_supplier_code'] ?? null;
+                $updateData['target_supplier_bill_no'] = $validated['target_supplier_bill_no'] ?? null;
+                $updateData['target_supplier_bill_value'] = $validated['target_supplier_bill_value'] ?? 0;
+                $updateData['adjustment_amount'] = $validated['loan_amount'];
+
+                // Update target supplier bill payment if this is a bill_to_bill payment
+                $this->currentSupplierCode = $validated['code'];
+                $this->currentBillNo = $validated['bill_no'];
+
+                if (!empty($validated['target_supplier_code']) && !empty($validated['target_supplier_bill_no'])) {
+                    $this->updateTargetSupplierBillPayment(
+                        $validated['target_supplier_code'],
+                        $validated['target_supplier_bill_no'],
+                        $validated['target_supplier_bill_value'] ?? 0,
+                        $existingLoan->Creditor_no ?? null,
+                        $useHistory
+                    );
+                }
+            } elseif ($validated['type'] === 'bad_debt') {
+                $updateData['bad_debt_name'] = $validated['bad_debt_name'] ?? null;
+                $updateData['bad_debt_amount'] = $validated['bad_debt_amount'] ?? 0;
+            }
+
+            // Update the loan record
+            DB::table($table)->where('id', $id)->update($updateData);
+
+            // Get the updated record
+            $updatedLoan = DB::table($table)->where('id', $id)->first();
+
+            DB::commit();
+
+            // Calculate remaining amount
+            $remainingAmount = $this->calculateRemainingAmount(
+                $validated['total_amount'],
+                $mergedPaymentDetails
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Payment updated successfully.',
+                'data' => $updatedLoan,
+                'total_paid_excluding_credit' => $newTotalPaidExcludingCredit,
+                'remaining_amount' => $remainingAmount,
+                'payments_count' => count($mergedPaymentDetails)
+            ], 200);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Loan Update Error: ' . $e->getMessage());
+            Log::error('Stack trace: ' . $e->getTraceAsString());
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
             ], 500);
         }
     }

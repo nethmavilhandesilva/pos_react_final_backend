@@ -320,6 +320,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/pending-farmer-bills', [SupplierLoanController::class, 'getPendingFarmerBills']);
 
     // Supplier Loan Summary Routes
+    Route::put('/supplier-loan/{id}', [SupplierLoanController::class, 'update']);
     Route::get('/supplier-loan/loan-summary', [SupplierLoanController::class, 'getLoanSummary']);
 
     // ==================== FARMER LOAN ROUTES ====================
