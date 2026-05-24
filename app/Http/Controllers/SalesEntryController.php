@@ -1295,311 +1295,311 @@ class SalesEntryController extends Controller
         }
     }
 
-public function updateGivenAmountApplied(Request $request)
-{
-    \Log::info('updateGivenAmountApplied called', $request->all());
+    public function updateGivenAmountApplied(Request $request)
+    {
+        \Log::info('updateGivenAmountApplied called', $request->all());
 
-    $request->validate([
-        'bill_no' => 'required|string',
-        'given_amount' => 'nullable|numeric|min:0',
-        'given_amount_applied' => 'required|in:Y,N',
-        'credit_transaction' => 'nullable|in:Y,N',
-        'payment_amount' => 'required|numeric|min:0',
-        'payment_method' => 'required|string',
-        'cheq_date' => 'nullable|date',
-        'cheq_no' => 'nullable|string|max:255',
-        'bank_account_id' => 'nullable|integer|exists:banks,id',
-        'bank_name' => 'nullable|string|max:255',
-        'transfer_reference_no' => 'nullable|string|max:255',
-        'transfer_date' => 'nullable|date',
-        'transfer_notes' => 'nullable|string',
-        'bag_count' => 'nullable|integer',
-        'box_count' => 'nullable|integer',
-        'bag_value' => 'nullable|numeric',
-        'box_value' => 'nullable|numeric',
-        'target_customer_code' => 'nullable|string',
-        'target_bill_no' => 'nullable|string',
-        'target_bill_value' => 'nullable|numeric',
-        'target_supplier_code' => 'nullable|string',
-        'target_supplier_bill_no' => 'nullable|string',
-        'target_supplier_bill_value' => 'nullable|numeric',
-        'bad_debt_name' => 'nullable|string',
-        'bad_debt_amount' => 'nullable|numeric'
-    ]);
-
-    try {
-        DB::beginTransaction();
-
-        // ========== CHECK IF THIS IS AN ARCHIVED BILL ==========
-        // First check in SalesHistory (archived bills)
-        $archivedSale = DB::table('sales_histories')
-            ->where('bill_no', $request->bill_no)
-            ->where('bill_printed', 'Y')
-            ->first();
-        
-        // Determine which table to update
-        $isArchived = ($archivedSale !== null);
-        $tableName = $isArchived ? 'sales_histories' : 'sales';
-        
-        // Log which table we're updating
-        \Log::info('Updating bill in table', [
-            'bill_no' => $request->bill_no,
-            'table' => $tableName,
-            'is_archived' => $isArchived
+        $request->validate([
+            'bill_no' => 'required|string',
+            'given_amount' => 'nullable|numeric|min:0',
+            'given_amount_applied' => 'required|in:Y,N',
+            'credit_transaction' => 'nullable|in:Y,N',
+            'payment_amount' => 'required|numeric|min:0',
+            'payment_method' => 'required|string',
+            'cheq_date' => 'nullable|date',
+            'cheq_no' => 'nullable|string|max:255',
+            'bank_account_id' => 'nullable|integer|exists:banks,id',
+            'bank_name' => 'nullable|string|max:255',
+            'transfer_reference_no' => 'nullable|string|max:255',
+            'transfer_date' => 'nullable|date',
+            'transfer_notes' => 'nullable|string',
+            'bag_count' => 'nullable|integer',
+            'box_count' => 'nullable|integer',
+            'bag_value' => 'nullable|numeric',
+            'box_value' => 'nullable|numeric',
+            'target_customer_code' => 'nullable|string',
+            'target_bill_no' => 'nullable|string',
+            'target_bill_value' => 'nullable|numeric',
+            'target_supplier_code' => 'nullable|string',
+            'target_supplier_bill_no' => 'nullable|string',
+            'target_supplier_bill_value' => 'nullable|numeric',
+            'bad_debt_name' => 'nullable|string',
+            'bad_debt_amount' => 'nullable|numeric'
         ]);
-        
-        // Get the current sale record from the appropriate table
-        $sale = DB::table($tableName)
-            ->where('bill_no', $request->bill_no)
-            ->where('bill_printed', 'Y')
-            ->first();
 
-        if (!$sale) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'No sales found with this bill_no',
-                'bill_no' => $request->bill_no
-            ], 404);
-        }
+        try {
+            DB::beginTransaction();
 
-        // Get the customer code from the sale
-        $customerCode = $sale->customer_code;
-        $debtorNo = null;
-        
-        // Try to find debtor record for this bill
-        $debtorRecord = Debtor::where('bill_no', $request->bill_no)
-            ->where('customer_code', $customerCode)
-            ->first();
-        
-        if ($debtorRecord) {
-            $debtorNo = $debtorRecord->Debtor_no;
-            \Log::info('Found debtor record for bill', [
+            // ========== CHECK IF THIS IS AN ARCHIVED BILL ==========
+            // First check in SalesHistory (archived bills)
+            $archivedSale = DB::table('sales_histories')
+                ->where('bill_no', $request->bill_no)
+                ->where('bill_printed', 'Y')
+                ->first();
+
+            // Determine which table to update
+            $isArchived = ($archivedSale !== null);
+            $tableName = $isArchived ? 'sales_histories' : 'sales';
+
+            // Log which table we're updating
+            \Log::info('Updating bill in table', [
                 'bill_no' => $request->bill_no,
-                'debtor_no' => $debtorNo
+                'table' => $tableName,
+                'is_archived' => $isArchived
             ]);
-        } else {
-            // If no debtor record for this bill, try to get from customer table
-            $customer = Customer::where('short_name', $customerCode)->first();
-            if ($customer && $customer->Debtor_no) {
-                $debtorNo = $customer->Debtor_no;
-                \Log::info('Using customer debtor number', [
-                    'customer_code' => $customerCode,
+
+            // Get the current sale record from the appropriate table
+            $sale = DB::table($tableName)
+                ->where('bill_no', $request->bill_no)
+                ->where('bill_printed', 'Y')
+                ->first();
+
+            if (!$sale) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No sales found with this bill_no',
+                    'bill_no' => $request->bill_no
+                ], 404);
+            }
+
+            // Get the customer code from the sale
+            $customerCode = $sale->customer_code;
+            $debtorNo = null;
+
+            // Try to find debtor record for this bill
+            $debtorRecord = Debtor::where('bill_no', $request->bill_no)
+                ->where('customer_code', $customerCode)
+                ->first();
+
+            if ($debtorRecord) {
+                $debtorNo = $debtorRecord->Debtor_no;
+                \Log::info('Found debtor record for bill', [
+                    'bill_no' => $request->bill_no,
+                    'debtor_no' => $debtorNo
+                ]);
+            } else {
+                // If no debtor record for this bill, try to get from customer table
+                $customer = Customer::where('short_name', $customerCode)->first();
+                if ($customer && $customer->Debtor_no) {
+                    $debtorNo = $customer->Debtor_no;
+                    \Log::info('Using customer debtor number', [
+                        'customer_code' => $customerCode,
+                        'debtor_no' => $debtorNo
+                    ]);
+                }
+            }
+
+            // Get existing payment history or initialize empty array
+            $paymentHistory = [];
+            if ($sale->payment_history) {
+                if (is_string($sale->payment_history)) {
+                    $paymentHistory = json_decode($sale->payment_history, true) ?: [];
+                } elseif (is_array($sale->payment_history)) {
+                    $paymentHistory = $sale->payment_history;
+                }
+            }
+
+            // Calculate new running total
+            $previousTotal = (float) ($sale->given_amount ?? 0);
+            $paymentAmount = (float) $request->payment_amount;
+            $newTotal = $previousTotal + $paymentAmount;
+            $isFullyPaid = $request->given_amount_applied === 'Y';
+
+            // Create payment record
+            $paymentRecord = [
+                'id' => uniqid(),
+                'date' => now()->toDateTimeString(),
+                'amount' => $paymentAmount,
+                'method' => $request->payment_method,
+                'running_balance' => $newTotal,
+                'is_fully_paid' => $isFullyPaid,
+                'reference' => null,
+                'details' => []
+            ];
+
+            // Add specific payment details based on method
+            if ($request->payment_method === 'Cheque') {
+                $paymentRecord['reference'] = $request->cheq_no;
+                $paymentRecord['details'] = [
+                    'cheq_no' => $request->cheq_no,
+                    'cheq_date' => $request->cheq_date,
+                    'bank_account_id' => $request->bank_account_id,
+                    'bank_name' => $request->bank_name
+                ];
+            } elseif ($request->payment_method === 'Bank Transfer') {
+                $paymentRecord['reference'] = $request->transfer_reference_no;
+                $paymentRecord['details'] = [
+                    'transfer_reference_no' => $request->transfer_reference_no,
+                    'transfer_date' => $request->transfer_date,
+                    'transfer_notes' => $request->transfer_notes,
+                    'bank_account_id' => $request->bank_account_id,
+                    'bank_name' => $request->bank_name
+                ];
+            } elseif ($request->payment_method === 'bag_to_box') {
+                $adjustmentAmount = ((int) $request->bag_count * (float) $request->bag_value) - ((int) $request->box_count * (float) $request->box_value);
+                $paymentRecord['reference'] = "{$request->bag_count} bags to {$request->box_count} boxes";
+                $paymentRecord['details'] = [
+                    'bag_count' => (int) $request->bag_count,
+                    'box_count' => (int) $request->box_count,
+                    'bag_value' => (float) $request->bag_value,
+                    'box_value' => (float) $request->box_value,
+                    'adjustment_amount' => $adjustmentAmount
+                ];
+            } elseif ($request->payment_method === 'bill_to_bill') {
+                $paymentRecord['reference'] = $request->target_bill_no;
+                $paymentRecord['details'] = [
+                    'target_customer_code' => $request->target_customer_code,
+                    'target_bill_no' => $request->target_bill_no,
+                    'target_bill_value' => (float) $request->target_bill_value,
+                    'target_supplier_code' => $request->target_supplier_code,
+                    'target_supplier_bill_no' => $request->target_supplier_bill_no,
+                    'target_supplier_bill_value' => (float) $request->target_supplier_bill_value
+                ];
+            } elseif ($request->payment_method === 'bad_debt') {
+                $paymentRecord['reference'] = $request->bad_debt_name;
+                $paymentRecord['details'] = [
+                    'bad_debt_name' => $request->bad_debt_name,
+                    'bad_debt_amount' => (float) $request->bad_debt_amount
+                ];
+            } elseif ($request->payment_method === 'Credit') {
+                $paymentRecord['reference'] = 'Credit Payment';
+                $paymentRecord['details'] = [
+                    'credit_amount' => $paymentAmount,
+                    'is_credit' => true
+                ];
+            } else { // Cash
+                $paymentRecord['reference'] = 'Cash';
+                $paymentRecord['details'] = [];
+            }
+
+            // Add debtor_no to payment record details if available
+            if ($debtorNo) {
+                $paymentRecord['details']['debtor_no'] = $debtorNo;
+            }
+
+            // Add to payment history array
+            $paymentHistory[] = $paymentRecord;
+
+            // Build update data for the appropriate table
+            $updateData = [
+                'given_amount' => $newTotal,
+                'given_amount_applied' => $request->given_amount_applied,
+                'credit_transaction' => $request->credit_transaction ?? 'N',
+                'payment_adjustment_type' => $request->payment_method,
+                'adjustment_amount' => $paymentAmount,
+                'payment_history' => json_encode($paymentHistory),
+                'updated_at' => now()
+            ];
+
+            // Add debtor_no to update data if available
+            if ($debtorNo) {
+                $updateData['Debtor_no'] = $debtorNo;
+                \Log::info('Storing debtor_no in ' . $tableName, [
+                    'bill_no' => $request->bill_no,
                     'debtor_no' => $debtorNo
                 ]);
             }
-        }
 
-        // Get existing payment history or initialize empty array
-        $paymentHistory = [];
-        if ($sale->payment_history) {
-            if (is_string($sale->payment_history)) {
-                $paymentHistory = json_decode($sale->payment_history, true) ?: [];
-            } elseif (is_array($sale->payment_history)) {
-                $paymentHistory = $sale->payment_history;
+            // Add latest payment details to main columns for quick reference
+            if ($request->payment_method === 'Bank Transfer') {
+                if ($request->has('bank_account_id') && $request->bank_account_id) {
+                    $updateData['bank_account_id'] = $request->bank_account_id;
+                    $bank = Bank::find($request->bank_account_id);
+                    if ($bank) {
+                        $updateData['bank_name'] = $bank->bank_name;
+                    }
+                }
+                $updateData['transfer_reference_no'] = $request->transfer_reference_no;
+                $updateData['transfer_date'] = $request->transfer_date;
+                $updateData['transfer_notes'] = $request->transfer_notes;
+                $updateData['cheq_date'] = null;
+                $updateData['cheq_no'] = null;
+            } elseif ($request->payment_method === 'Cheque') {
+                $updateData['cheq_date'] = $request->cheq_date;
+                $updateData['cheq_no'] = $request->cheq_no;
+                if ($request->has('bank_account_id') && $request->bank_account_id) {
+                    $updateData['bank_account_id'] = $request->bank_account_id;
+                    $bank = Bank::find($request->bank_account_id);
+                    if ($bank) {
+                        $updateData['bank_name'] = $bank->bank_name;
+                    }
+                }
+                $updateData['transfer_reference_no'] = null;
+                $updateData['transfer_date'] = null;
+                $updateData['transfer_notes'] = null;
+            } elseif ($request->payment_method === 'bag_to_box') {
+                $updateData['bag_count'] = $request->bag_count;
+                $updateData['box_count'] = $request->box_count;
+                $updateData['bag_value'] = $request->bag_value;
+                $updateData['box_value'] = $request->box_value;
+            } elseif ($request->payment_method === 'bill_to_bill') {
+                $updateData['target_customer_code'] = $request->target_customer_code;
+                $updateData['target_bill_no'] = $request->target_bill_no;
+                $updateData['target_bill_value'] = $request->target_bill_value;
+                $updateData['target_supplier_code'] = $request->target_supplier_code;
+                $updateData['target_supplier_bill_no'] = $request->target_supplier_bill_no;
+                $updateData['target_supplier_bill_value'] = $request->target_supplier_bill_value;
+            } elseif ($request->payment_method === 'bad_debt') {
+                $updateData['bad_debt_name'] = $request->bad_debt_name;
+                $updateData['bad_debt_amount'] = $request->bad_debt_amount;
+            } else { // Cash or Credit
+                $updateData['cheq_date'] = null;
+                $updateData['cheq_no'] = null;
+                $updateData['bank_account_id'] = null;
+                $updateData['transfer_reference_no'] = null;
+                $updateData['transfer_date'] = null;
+                $updateData['transfer_notes'] = null;
             }
-        }
 
-        // Calculate new running total
-        $previousTotal = (float) ($sale->given_amount ?? 0);
-        $paymentAmount = (float) $request->payment_amount;
-        $newTotal = $previousTotal + $paymentAmount;
-        $isFullyPaid = $request->given_amount_applied === 'Y';
+            // Update the record in the appropriate table
+            $updated = DB::table($tableName)
+                ->where('bill_no', $request->bill_no)
+                ->where('bill_printed', 'Y')
+                ->update($updateData);
 
-        // Create payment record
-        $paymentRecord = [
-            'id' => uniqid(),
-            'date' => now()->toDateTimeString(),
-            'amount' => $paymentAmount,
-            'method' => $request->payment_method,
-            'running_balance' => $newTotal,
-            'is_fully_paid' => $isFullyPaid,
-            'reference' => null,
-            'details' => []
-        ];
+            if ($updated === 0) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Failed to update sales record',
+                    'bill_no' => $request->bill_no
+                ], 404);
+            }
 
-        // Add specific payment details based on method
-        if ($request->payment_method === 'Cheque') {
-            $paymentRecord['reference'] = $request->cheq_no;
-            $paymentRecord['details'] = [
-                'cheq_no' => $request->cheq_no,
-                'cheq_date' => $request->cheq_date,
-                'bank_account_id' => $request->bank_account_id,
-                'bank_name' => $request->bank_name
-            ];
-        } elseif ($request->payment_method === 'Bank Transfer') {
-            $paymentRecord['reference'] = $request->transfer_reference_no;
-            $paymentRecord['details'] = [
-                'transfer_reference_no' => $request->transfer_reference_no,
-                'transfer_date' => $request->transfer_date,
-                'transfer_notes' => $request->transfer_notes,
-                'bank_account_id' => $request->bank_account_id,
-                'bank_name' => $request->bank_name
-            ];
-        } elseif ($request->payment_method === 'bag_to_box') {
-            $adjustmentAmount = ((int) $request->bag_count * (float) $request->bag_value) - ((int) $request->box_count * (float) $request->box_value);
-            $paymentRecord['reference'] = "{$request->bag_count} bags to {$request->box_count} boxes";
-            $paymentRecord['details'] = [
-                'bag_count' => (int) $request->bag_count,
-                'box_count' => (int) $request->box_count,
-                'bag_value' => (float) $request->bag_value,
-                'box_value' => (float) $request->box_value,
-                'adjustment_amount' => $adjustmentAmount
-            ];
-        } elseif ($request->payment_method === 'bill_to_bill') {
-            $paymentRecord['reference'] = $request->target_bill_no;
-            $paymentRecord['details'] = [
-                'target_customer_code' => $request->target_customer_code,
-                'target_bill_no' => $request->target_bill_no,
-                'target_bill_value' => (float) $request->target_bill_value,
-                'target_supplier_code' => $request->target_supplier_code,
-                'target_supplier_bill_no' => $request->target_supplier_bill_no,
-                'target_supplier_bill_value' => (float) $request->target_supplier_bill_value
-            ];
-        } elseif ($request->payment_method === 'bad_debt') {
-            $paymentRecord['reference'] = $request->bad_debt_name;
-            $paymentRecord['details'] = [
-                'bad_debt_name' => $request->bad_debt_name,
-                'bad_debt_amount' => (float) $request->bad_debt_amount
-            ];
-        } elseif ($request->payment_method === 'Credit') {
-            $paymentRecord['reference'] = 'Credit Payment';
-            $paymentRecord['details'] = [
-                'credit_amount' => $paymentAmount,
-                'is_credit' => true
-            ];
-        } else { // Cash
-            $paymentRecord['reference'] = 'Cash';
-            $paymentRecord['details'] = [];
-        }
+            DB::commit();
 
-        // Add debtor_no to payment record details if available
-        if ($debtorNo) {
-            $paymentRecord['details']['debtor_no'] = $debtorNo;
-        }
-
-        // Add to payment history array
-        $paymentHistory[] = $paymentRecord;
-
-        // Build update data for the appropriate table
-        $updateData = [
-            'given_amount' => $newTotal,
-            'given_amount_applied' => $request->given_amount_applied,
-            'credit_transaction' => $request->credit_transaction ?? 'N',
-            'payment_adjustment_type' => $request->payment_method,
-            'adjustment_amount' => $paymentAmount,
-            'payment_history' => json_encode($paymentHistory),
-            'updated_at' => now()
-        ];
-
-        // Add debtor_no to update data if available
-        if ($debtorNo) {
-            $updateData['Debtor_no'] = $debtorNo;
-            \Log::info('Storing debtor_no in ' . $tableName, [
-                'bill_no' => $request->bill_no,
-                'debtor_no' => $debtorNo
+            return response()->json([
+                'success' => true,
+                'message' => "Successfully updated with {$request->payment_method} payment",
+                'data' => [
+                    'bill_no' => $request->bill_no,
+                    'given_amount' => $newTotal,
+                    'given_amount_applied' => $request->given_amount_applied,
+                    'payment_method' => $request->payment_method,
+                    'payment_history' => $paymentHistory,
+                    'debtor_no' => $debtorNo,
+                    'affected_rows' => $updated,
+                    'is_archived' => $isArchived,
+                    'table_updated' => $tableName
+                ]
             ]);
-        }
 
-        // Add latest payment details to main columns for quick reference
-        if ($request->payment_method === 'Bank Transfer') {
-            if ($request->has('bank_account_id') && $request->bank_account_id) {
-                $updateData['bank_account_id'] = $request->bank_account_id;
-                $bank = Bank::find($request->bank_account_id);
-                if ($bank) {
-                    $updateData['bank_name'] = $bank->bank_name;
-                }
-            }
-            $updateData['transfer_reference_no'] = $request->transfer_reference_no;
-            $updateData['transfer_date'] = $request->transfer_date;
-            $updateData['transfer_notes'] = $request->transfer_notes;
-            $updateData['cheq_date'] = null;
-            $updateData['cheq_no'] = null;
-        } elseif ($request->payment_method === 'Cheque') {
-            $updateData['cheq_date'] = $request->cheq_date;
-            $updateData['cheq_no'] = $request->cheq_no;
-            if ($request->has('bank_account_id') && $request->bank_account_id) {
-                $updateData['bank_account_id'] = $request->bank_account_id;
-                $bank = Bank::find($request->bank_account_id);
-                if ($bank) {
-                    $updateData['bank_name'] = $bank->bank_name;
-                }
-            }
-            $updateData['transfer_reference_no'] = null;
-            $updateData['transfer_date'] = null;
-            $updateData['transfer_notes'] = null;
-        } elseif ($request->payment_method === 'bag_to_box') {
-            $updateData['bag_count'] = $request->bag_count;
-            $updateData['box_count'] = $request->box_count;
-            $updateData['bag_value'] = $request->bag_value;
-            $updateData['box_value'] = $request->box_value;
-        } elseif ($request->payment_method === 'bill_to_bill') {
-            $updateData['target_customer_code'] = $request->target_customer_code;
-            $updateData['target_bill_no'] = $request->target_bill_no;
-            $updateData['target_bill_value'] = $request->target_bill_value;
-            $updateData['target_supplier_code'] = $request->target_supplier_code;
-            $updateData['target_supplier_bill_no'] = $request->target_supplier_bill_no;
-            $updateData['target_supplier_bill_value'] = $request->target_supplier_bill_value;
-        } elseif ($request->payment_method === 'bad_debt') {
-            $updateData['bad_debt_name'] = $request->bad_debt_name;
-            $updateData['bad_debt_amount'] = $request->bad_debt_amount;
-        } else { // Cash or Credit
-            $updateData['cheq_date'] = null;
-            $updateData['cheq_no'] = null;
-            $updateData['bank_account_id'] = null;
-            $updateData['transfer_reference_no'] = null;
-            $updateData['transfer_date'] = null;
-            $updateData['transfer_notes'] = null;
-        }
-
-        // Update the record in the appropriate table
-        $updated = DB::table($tableName)
-            ->where('bill_no', $request->bill_no)
-            ->where('bill_printed', 'Y')
-            ->update($updateData);
-
-        if ($updated === 0) {
+        } catch (\Exception $e) {
             DB::rollBack();
+            \Log::error('Error updating given amount applied:', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
+            ]);
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to update sales record',
-                'bill_no' => $request->bill_no
-            ], 404);
+                'message' => 'Internal server error: ' . $e->getMessage(),
+                'error' => $e->getMessage()
+            ], 500);
         }
-
-        DB::commit();
-
-        return response()->json([
-            'success' => true,
-            'message' => "Successfully updated with {$request->payment_method} payment",
-            'data' => [
-                'bill_no' => $request->bill_no,
-                'given_amount' => $newTotal,
-                'given_amount_applied' => $request->given_amount_applied,
-                'payment_method' => $request->payment_method,
-                'payment_history' => $paymentHistory,
-                'debtor_no' => $debtorNo,
-                'affected_rows' => $updated,
-                'is_archived' => $isArchived,
-                'table_updated' => $tableName
-            ]
-        ]);
-
-    } catch (\Exception $e) {
-        DB::rollBack();
-        \Log::error('Error updating given amount applied:', [
-            'error' => $e->getMessage(),
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
-            'trace' => $e->getTraceAsString()
-        ]);
-        return response()->json([
-            'success' => false,
-            'message' => 'Internal server error: ' . $e->getMessage(),
-            'error' => $e->getMessage()
-        ], 500);
     }
-}
     /**
      * Update single sale record
      */
@@ -1891,95 +1891,95 @@ public function updateGivenAmountApplied(Request $request)
     /**
      * Get payment history for a specific bill
      */
- public function getPaymentHistory($billNo)
-{
-    try {
-        // First try to find the bill in sales table
-        $sale = DB::table('sales')
-            ->where('bill_no', $billNo)
-            ->where('bill_printed', 'Y')
-            ->first();
-
-        $isFromHistory = false;
-
-        // If not found in sales, try sales_histories table
-        if (!$sale) {
-            $sale = DB::table('sales_histories')
+    public function getPaymentHistory($billNo)
+    {
+        try {
+            // First try to find the bill in sales table
+            $sale = DB::table('sales')
                 ->where('bill_no', $billNo)
                 ->where('bill_printed', 'Y')
                 ->first();
-            
-            if ($sale) {
-                $isFromHistory = true;
-            }
-        }
 
-        if (!$sale) {
+            $isFromHistory = false;
+
+            // If not found in sales, try sales_histories table
+            if (!$sale) {
+                $sale = DB::table('sales_histories')
+                    ->where('bill_no', $billNo)
+                    ->where('bill_printed', 'Y')
+                    ->first();
+
+                if ($sale) {
+                    $isFromHistory = true;
+                }
+            }
+
+            if (!$sale) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Bill not found'
+                ], 404);
+            }
+
+            // Get payment history - handle both string and array cases
+            $paymentHistory = [];
+            if ($sale->payment_history) {
+                if (is_string($sale->payment_history)) {
+                    $paymentHistory = json_decode($sale->payment_history, true) ?: [];
+                } elseif (is_array($sale->payment_history)) {
+                    $paymentHistory = $sale->payment_history;
+                }
+            }
+
+            // Calculate totals from the appropriate table
+            $totalPaid = (float) ($sale->given_amount ?? 0);
+            $totalBill = 0;
+
+            // Get total bill amount from the appropriate table
+            $tableName = $isFromHistory ? 'sales_histories' : 'sales';
+
+            $totalBillRecords = DB::table($tableName)
+                ->where('bill_no', $billNo)
+                ->where('bill_printed', 'Y')
+                ->select(DB::raw('SUM(total + (packs * CustomerPackCost)) as total'))
+                ->first();
+
+            if ($totalBillRecords) {
+                $totalBill = (float) ($totalBillRecords->total ?? 0);
+            }
+
+            $remaining = max(0, $totalBill - $totalPaid);
+
+            // Format payments for display
+            $formattedPayments = array_map(function ($payment) {
+                return [
+                    'date' => $payment['date'],
+                    'amount' => (float) $payment['amount'],
+                    'method' => $payment['method'],
+                    'reference' => $payment['reference'] ?? null,
+                    'running_balance' => $payment['running_balance'] ?? null,
+                    'is_fully_paid' => $payment['is_fully_paid'] ?? false,
+                    'details' => $payment['details'] ?? []
+                ];
+            }, $paymentHistory);
+
+            return response()->json([
+                'success' => true,
+                'payments' => $formattedPayments,
+                'total_paid' => $totalPaid,
+                'total_bill' => $totalBill,
+                'remaining' => $remaining,
+                'source_table' => $tableName // Optional: indicate which table the data came from
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('Failed to fetch payment history: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Bill not found'
-            ], 404);
+                'message' => 'Failed to fetch payment history: ' . $e->getMessage()
+            ], 500);
         }
-
-        // Get payment history - handle both string and array cases
-        $paymentHistory = [];
-        if ($sale->payment_history) {
-            if (is_string($sale->payment_history)) {
-                $paymentHistory = json_decode($sale->payment_history, true) ?: [];
-            } elseif (is_array($sale->payment_history)) {
-                $paymentHistory = $sale->payment_history;
-            }
-        }
-
-        // Calculate totals from the appropriate table
-        $totalPaid = (float) ($sale->given_amount ?? 0);
-        $totalBill = 0;
-
-        // Get total bill amount from the appropriate table
-        $tableName = $isFromHistory ? 'sales_histories' : 'sales';
-        
-        $totalBillRecords = DB::table($tableName)
-            ->where('bill_no', $billNo)
-            ->where('bill_printed', 'Y')
-            ->select(DB::raw('SUM(total + (packs * CustomerPackCost)) as total'))
-            ->first();
-
-        if ($totalBillRecords) {
-            $totalBill = (float) ($totalBillRecords->total ?? 0);
-        }
-
-        $remaining = max(0, $totalBill - $totalPaid);
-
-        // Format payments for display
-        $formattedPayments = array_map(function ($payment) {
-            return [
-                'date' => $payment['date'],
-                'amount' => (float) $payment['amount'],
-                'method' => $payment['method'],
-                'reference' => $payment['reference'] ?? null,
-                'running_balance' => $payment['running_balance'] ?? null,
-                'is_fully_paid' => $payment['is_fully_paid'] ?? false,
-                'details' => $payment['details'] ?? []
-            ];
-        }, $paymentHistory);
-
-        return response()->json([
-            'success' => true,
-            'payments' => $formattedPayments,
-            'total_paid' => $totalPaid,
-            'total_bill' => $totalBill,
-            'remaining' => $remaining,
-            'source_table' => $tableName // Optional: indicate which table the data came from
-        ]);
-
-    } catch (\Exception $e) {
-        \Log::error('Failed to fetch payment history: ' . $e->getMessage());
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to fetch payment history: ' . $e->getMessage()
-        ], 500);
     }
-}
     public function getPaymentCollectionReport(Request $request)
     {
         try {
@@ -2626,49 +2626,93 @@ public function updateGivenAmountApplied(Request $request)
         }
     }
     /**
- * Get archived sales from SalesHistory table with date range
- */
-public function getArchivedSales(Request $request)
-{
-    try {
-        $request->validate([
-            'start_date' => 'required|date',
-            'end_date' => 'required|date'
-        ]);
-        
-        $startDate = $request->start_date;
-        $endDate = $request->end_date;
-        
-        $currentUser = auth()->user();
-        
-        $query = SalesHistory::where('bill_printed', 'Y');
-        
-        // Apply date filter
-        $query->whereDate('Date', '>=', $startDate)
-              ->whereDate('Date', '<=', $endDate);
-        
-        // Apply user filter if not admin
-        if ($currentUser && $currentUser->role === 'User') {
-            $query->where('UniqueCode', $currentUser->user_id);
+     * Get archived sales from SalesHistory table with date range
+     */
+    public function getArchivedSales(Request $request)
+    {
+        try {
+            $request->validate([
+                'start_date' => 'required|date',
+                'end_date' => 'required|date'
+            ]);
+
+            $startDate = $request->start_date;
+            $endDate = $request->end_date;
+
+            $currentUser = auth()->user();
+
+            $query = SalesHistory::where('bill_printed', 'Y');
+
+            // Apply date filter
+            $query->whereDate('Date', '>=', $startDate)
+                ->whereDate('Date', '<=', $endDate);
+
+            // Apply user filter if not admin
+            if ($currentUser && $currentUser->role === 'User') {
+                $query->where('UniqueCode', $currentUser->user_id);
+            }
+
+            $sales = $query->orderBy('created_at', 'desc')->get();
+
+            return response()->json([
+                'success' => true,
+                'sales' => $sales,
+                'count' => $sales->count(),
+                'date_range' => [
+                    'start_date' => $startDate,
+                    'end_date' => $endDate
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to fetch archived sales: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch archived sales: ' . $e->getMessage()
+            ], 500);
         }
-        
-        $sales = $query->orderBy('created_at', 'desc')->get();
-        
+    }
+    public function updateCustomerAndDebtor(Request $request)
+{
+    $request->validate([
+        'bill_no' => 'required|string',
+        'old_customer_code' => 'required|string',
+        'new_customer_code' => 'required|string',
+        'debtor_no' => 'nullable|string'
+    ]);
+
+    try {
+        // Update all sales records with the same bill_no
+        $updatedCount = Sale::where('bill_no', $request->bill_no)
+            ->where('customer_code', $request->old_customer_code)
+            ->update([
+                'customer_code' => $request->new_customer_code,
+                'Debtor_no' => $request->debtor_no
+            ]);
+
+        // Also update the debtor record if it exists
+        if ($request->debtor_no) {
+            // Update debtor table to link with new customer code
+            \App\Models\Debtor::where('bill_no', $request->bill_no)
+                ->update([
+                    'customer_code' => $request->new_customer_code,
+                    'Debtor_no' => $request->debtor_no
+                ]);
+        }
+
         return response()->json([
             'success' => true,
-            'sales' => $sales,
-            'count' => $sales->count(),
-            'date_range' => [
-                'start_date' => $startDate,
-                'end_date' => $endDate
-            ]
+            'message' => "Customer code and debtor number updated successfully",
+            'updated_count' => $updatedCount,
+            'bill_no' => $request->bill_no,
+            'old_customer_code' => $request->old_customer_code,
+            'new_customer_code' => $request->new_customer_code,
+            'debtor_no' => $request->debtor_no
         ]);
-        
     } catch (\Exception $e) {
-        Log::error('Failed to fetch archived sales: ' . $e->getMessage());
         return response()->json([
             'success' => false,
-            'message' => 'Failed to fetch archived sales: ' . $e->getMessage()
+            'message' => 'Failed to update: ' . $e->getMessage()
         ], 500);
     }
 }

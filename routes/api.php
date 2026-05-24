@@ -395,5 +395,6 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Add this inside the authenticated routes group
     Route::get('/sales/archived', [SalesEntryController::class, 'getArchivedSales']);
+  Route::put('/sales/update-customer-and-debtor', [SalesEntryController::class, 'updateCustomerAndDebtor']);
     
 });
