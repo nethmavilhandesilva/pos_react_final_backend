@@ -39,13 +39,13 @@ class CreditorController extends Controller
                 // Update existing creditor for this specific bill - ADD to existing credit
                 $newCreditAmount = $creditor->credit_amount + $request->credit_amount;
                 $newRemainingAmount = $creditor->remaining_amount + $request->credit_amount;
-                
+
                 $creditor->credit_amount = $newCreditAmount;
                 $creditor->remaining_amount = $newRemainingAmount;
                 $creditor->status = $newRemainingAmount > 0 ? 'pending' : 'paid';
                 $creditor->settled_way = 'credit';
                 $creditor->save();
-                
+
                 $result = $creditor;
             } else {
                 // Create new creditor record for this specific bill
@@ -75,7 +75,7 @@ class CreditorController extends Controller
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
-            
+
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage()
@@ -89,7 +89,7 @@ class CreditorController extends Controller
         $request->validate([
             'bill_no' => 'required|string',
             'payment_amount' => 'required|numeric|min:0',
-            'payment_method' => 'required|string|in:cash,cheque,bank_transfer,adjustment'
+            'payment_method' => 'required|string|in:cash,cheque,bank_transfer,adjustment,bag_to_box,bill_to_bill,bad_debt'
         ]);
 
         try {
@@ -185,13 +185,13 @@ class CreditorController extends Controller
     {
         try {
             $query = Creditor::where('bill_no', $billNo);
-            
+
             if ($supplierCode) {
                 $query->where('supplier_code', $supplierCode);
             }
-            
+
             $creditor = $query->first();
-            
+
             return response()->json([
                 'success' => true,
                 'data' => $creditor
@@ -209,9 +209,9 @@ class CreditorController extends Controller
     {
         try {
             $creditors = Creditor::where('supplier_code', $supplierCode)
-                            ->orderBy('created_at', 'desc')
-                            ->get();
-            
+                ->orderBy('created_at', 'desc')
+                ->get();
+
             // Calculate summary
             $summary = [
                 'total_credit' => $creditors->sum('credit_amount'),
@@ -219,7 +219,7 @@ class CreditorController extends Controller
                 'total_remaining' => $creditors->sum('remaining_amount'),
                 'total_count' => $creditors->count()
             ];
-            
+
             return response()->json([
                 'success' => true,
                 'data' => $creditors,
@@ -238,16 +238,16 @@ class CreditorController extends Controller
     {
         try {
             $creditors = Creditor::where('status', '!=', 'paid')
-                            ->orderBy('created_at', 'desc')
-                            ->get();
-            
+                ->orderBy('created_at', 'desc')
+                ->get();
+
             $summary = [
                 'total_credit' => $creditors->sum('credit_amount'),
                 'total_paid' => $creditors->sum('paid_amount'),
                 'total_remaining' => $creditors->sum('remaining_amount'),
                 'total_count' => $creditors->count()
             ];
-            
+
             return response()->json([
                 'success' => true,
                 'data' => $creditors,
@@ -325,7 +325,7 @@ class CreditorController extends Controller
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
-            
+
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage()
@@ -338,7 +338,7 @@ class CreditorController extends Controller
     {
         try {
             $creditors = Creditor::where('supplier_code', $supplierCode)->get();
-            
+
             $summary = [
                 'supplier_code' => $supplierCode,
                 'total_credit_amount' => $creditors->sum('credit_amount'),
@@ -346,7 +346,7 @@ class CreditorController extends Controller
                 'total_remaining_amount' => $creditors->sum('remaining_amount'),
                 'active_bills_count' => $creditors->where('status', '!=', 'paid')->count(),
                 'settled_bills_count' => $creditors->where('status', 'paid')->count(),
-                'bills' => $creditors->map(function($creditor) {
+                'bills' => $creditors->map(function ($creditor) {
                     return [
                         'bill_no' => $creditor->bill_no,
                         'credit_amount' => $creditor->credit_amount,
@@ -358,7 +358,7 @@ class CreditorController extends Controller
                     ];
                 })
             ];
-            
+
             return response()->json([
                 'success' => true,
                 'data' => $summary
@@ -376,17 +376,17 @@ class CreditorController extends Controller
     {
         try {
             $query = Creditor::query();
-            
+
             // Filter by status
             if ($request->has('status') && $request->status) {
                 $query->where('status', $request->status);
             }
-            
+
             // Filter by supplier code
             if ($request->has('supplier_code') && $request->supplier_code) {
                 $query->where('supplier_code', 'LIKE', '%' . $request->supplier_code . '%');
             }
-            
+
             // Filter by date range
             if ($request->has('start_date') && $request->start_date) {
                 $query->whereDate('created_at', '>=', $request->start_date);
@@ -394,9 +394,9 @@ class CreditorController extends Controller
             if ($request->has('end_date') && $request->end_date) {
                 $query->whereDate('created_at', '<=', $request->end_date);
             }
-            
+
             $creditors = $query->orderBy('created_at', 'desc')->get();
-            
+
             $summary = [
                 'total_credit' => $creditors->sum('credit_amount'),
                 'total_paid' => $creditors->sum('paid_amount'),
@@ -406,7 +406,7 @@ class CreditorController extends Controller
                 'partial_count' => $creditors->where('status', 'partial')->count(),
                 'paid_count' => $creditors->where('status', 'paid')->count()
             ];
-            
+
             return response()->json([
                 'success' => true,
                 'data' => $creditors,
@@ -425,16 +425,16 @@ class CreditorController extends Controller
     {
         try {
             $creditor = Creditor::find($id);
-            
+
             if (!$creditor) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Creditor record not found'
                 ], 404);
             }
-            
+
             $creditor->delete();
-            
+
             return response()->json([
                 'success' => true,
                 'message' => 'Creditor record deleted successfully'

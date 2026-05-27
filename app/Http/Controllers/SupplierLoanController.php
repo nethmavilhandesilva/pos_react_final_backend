@@ -797,11 +797,12 @@ class SupplierLoanController extends Controller
                         ];
                     } else {
                         // Still has remaining balance - NOT SETTLED (from history)
+                        // FIXED: Use original totalAmount instead of remainingAmount
                         $pendingBills[] = [
                             'supplier_code' => $loan->code,
                             'supplier_bill_no' => $loan->bill_no,
                             'loan_amount' => $loanAmount,
-                            'total_amount' => $remainingAmount,
+                            'total_amount' => $totalAmount,  // FIXED: Use original total amount
                             'total_paid_excluding_credit' => $totalPaidExcludingCredit,
                             'total_credit_amount' => $totalCreditAmount,
                             'remaining_amount' => $remainingAmount,
@@ -886,11 +887,12 @@ class SupplierLoanController extends Controller
 
                         if ($remainingAmount > 0) {
                             // Still has remaining balance - NOT SETTLED
+                            // FIXED: Use original totalAmount instead of remainingAmount
                             $pendingBills[] = [
                                 'supplier_code' => $bill['supplier_code'],
                                 'supplier_bill_no' => $bill['supplier_bill_no'],
                                 'loan_amount' => $totalPaidExcludingCredit,
-                                'total_amount' => $remainingAmount,
+                                'total_amount' => $totalAmount,  // FIXED: Use original total amount
                                 'total_credit_amount' => $totalCreditAmount,
                                 'creditor_no' => $loanRecord->Creditor_no,
                                 'date' => $loanRecord->Date ?? null,
