@@ -718,245 +718,252 @@ class SupplierLoanController extends Controller
         }
     }
 
-    /**
-     * Get supplier loans summary with option to view history
-     */
-    public function getSupplierLoansSummary(Request $request): JsonResponse
-    {
-        try {
-            $useHistory = $request->query('use_history', false);
-            $startDate = $request->query('start_date');
-            $endDate = $request->query('end_date');
-            $isDateFiltered = $request->query('date_filtered', false);
+   public function getSupplierLoansSummary(Request $request): JsonResponse
+{
+    try {
+        $useHistory = $request->query('use_history', false);
+        $startDate = $request->query('start_date');
+        $endDate = $request->query('end_date');
+        $isDateFiltered = $request->query('date_filtered', false);
 
-            // Determine which table to use for loans
-            $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
+        // Determine which table to use for loans
+        $table = $useHistory ? 'supplier_loans_history' : 'supplier_loans';
 
-            Log::info('Fetching supplier loans summary', [
-                'use_history' => $useHistory,
-                'table' => $table,
-                'start_date' => $startDate,
-                'end_date' => $endDate,
-                'is_date_filtered' => $isDateFiltered
+        Log::info('Fetching supplier loans summary', [
+            'use_history' => $useHistory,
+            'table' => $table,
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'is_date_filtered' => $isDateFiltered
+        ]);
+
+        if ($useHistory) {
+            // For history table, we need to show ALL records from history
+            $query = DB::table($table)->select('code', 'bill_no', 'loan_amount', 'total_amount', 'Creditor_no', 'Date', 'type', 'payment_details');
+
+            // Apply date filters if provided
+            if ($isDateFiltered && $startDate && $endDate) {
+                $start = date('Y-m-d', strtotime($startDate));
+                $end = date('Y-m-d', strtotime($endDate));
+                $query->whereDate('Date', '>=', $start)
+                    ->whereDate('Date', '<=', $end);
+                Log::info('Applied date filter to query', ['start' => $start, 'end' => $end]);
+            }
+
+            $allLoans = $query->get();
+
+            Log::info('History loans fetched', [
+                'count' => $allLoans->count(),
+                'sample' => $allLoans->take(5)->toArray()
             ]);
 
-            if ($useHistory) {
-                // For history table, we need to show ALL records from history
-                $query = DB::table($table)->select('code', 'bill_no', 'loan_amount', 'total_amount', 'Creditor_no', 'Date', 'type', 'payment_details');
+            // For history, separate pending vs completed based on payment status
+            $pendingBills = [];
+            $completedBills = [];
 
-                // Apply date filters if provided
-                if ($isDateFiltered && $startDate && $endDate) {
-                    $start = date('Y-m-d', strtotime($startDate));
-                    $end = date('Y-m-d', strtotime($endDate));
-                    $query->whereDate('Date', '>=', $start)
-                        ->whereDate('Date', '<=', $end);
-                    Log::info('Applied date filter to query', ['start' => $start, 'end' => $end]);
+            foreach ($allLoans as $loan) {
+                $totalAmount = floatval($loan->total_amount);
+                $loanAmount = floatval($loan->loan_amount);
+
+                // Decode payment details to calculate remaining excluding credit
+                $paymentDetails = $loan->payment_details;
+                if (is_string($paymentDetails)) {
+                    $paymentDetails = json_decode($paymentDetails, true);
+                }
+                if (!is_array($paymentDetails)) {
+                    $paymentDetails = [];
                 }
 
-                $allLoans = $query->get();
+                // Calculate remaining amount (total - paid excluding credit)
+                $totalPaidExcludingCredit = $this->calculateTotalPaidExcludingCredit($paymentDetails);
+                $totalCreditAmount = $this->calculateTotalCreditAmount($paymentDetails);
+                $remainingAmount = max(0, $totalAmount - $totalPaidExcludingCredit);
 
-                Log::info('History loans fetched', [
-                    'count' => $allLoans->count(),
-                    'sample' => $allLoans->take(5)->toArray()
-                ]);
+                // Check if fully paid (remaining amount <= 0)
+                if ($remainingAmount <= 0) {
+                    // Fully paid - FULLY SETTLED
+                    $completedBills[] = [
+                        'supplier_code' => $loan->code,
+                        'supplier_bill_no' => $loan->bill_no,
+                        'loan_amount' => $totalPaidExcludingCredit,
+                        'total_amount' => $totalAmount,
+                        'total_paid_excluding_credit' => $totalPaidExcludingCredit,
+                        'total_credit_amount' => $totalCreditAmount,
+                        'remaining_amount' => $remainingAmount,
+                        'creditor_no' => $loan->Creditor_no,
+                        'date' => $loan->Date ?? null,
+                        'is_history' => true,
+                        'type' => $loan->type ?? null,
+                        'payment_details' => $paymentDetails  // ✅ ADDED: Include payment details
+                    ];
+                } else {
+                    // Still has remaining balance - NOT SETTLED (from history)
+                    $pendingBills[] = [
+                        'supplier_code' => $loan->code,
+                        'supplier_bill_no' => $loan->bill_no,
+                        'loan_amount' => $totalPaidExcludingCredit,
+                        'total_amount' => $totalAmount,
+                        'total_paid_excluding_credit' => $totalPaidExcludingCredit,
+                        'total_credit_amount' => $totalCreditAmount,
+                        'remaining_amount' => $remainingAmount,
+                        'creditor_no' => $loan->Creditor_no,
+                        'date' => $loan->Date ?? null,
+                        'is_history' => true,
+                        'type' => $loan->type ?? null,
+                        'payment_details' => $paymentDetails  // ✅ ADDED: Include payment details
+                    ];
+                }
+            }
 
-                // For history, separate pending vs completed based on payment status
-                $pendingBills = [];
-                $completedBills = [];
+            Log::info('History summary result', [
+                'pending_count' => count($pendingBills),
+                'completed_count' => count($completedBills),
+                'total_history_records' => $allLoans->count()
+            ]);
 
-                foreach ($allLoans as $loan) {
-                    $totalAmount = floatval($loan->total_amount);
-                    $loanAmount = floatval($loan->loan_amount);
+            return response()->json([
+                'printed' => $completedBills,    // Fully settled from history
+                'unprinted' => $pendingBills,     // Not settled from history
+                'table_used' => $table,
+                'date_filter_applied' => $isDateFiltered ? true : false,
+                'total_loans_found' => $allLoans->count()
+            ]);
 
-                    // Decode payment details to calculate remaining excluding credit
-                    $paymentDetails = $loan->payment_details;
+        } else {
+            // For current table, use the original logic with sales matching
+            // Get all printed bills from sales table
+            $allPrintedBills = DB::table('sales')
+                ->select('supplier_code', 'supplier_bill_no')
+                ->whereNotNull('supplier_code')
+                ->where('supplier_bill_printed', 'Y')
+                ->whereNotNull('supplier_bill_no')
+                ->where('supplier_bill_no', '!=', '')
+                ->groupBy('supplier_code', 'supplier_bill_no')
+                ->get()
+                ->map(function ($item) {
+                    return [
+                        'supplier_code' => $item->supplier_code,
+                        'supplier_bill_no' => $item->supplier_bill_no
+                    ];
+                });
+
+            Log::info('Found printed bills count', ['count' => $allPrintedBills->count()]);
+
+            // Get loans from current table
+            $query = DB::table($table)->select('code', 'bill_no', 'loan_amount', 'total_amount', 'Creditor_no', 'Date', 'type', 'payment_details');
+
+            $allLoans = $query->get();
+
+            Log::info('Current loans fetched', [
+                'count' => $allLoans->count(),
+                'sample' => $allLoans->take(5)->toArray()
+            ]);
+
+            // Create a keyed collection for faster lookup
+            $allLoansKeyed = $allLoans->keyBy(function ($item) {
+                return $item->code . '|' . $item->bill_no;
+            });
+
+            // Separate: Pending = have loans with remaining balance > 0
+            $pendingBills = [];
+            $completedBills = [];
+
+            foreach ($allPrintedBills as $bill) {
+                $key = $bill['supplier_code'] . '|' . $bill['supplier_bill_no'];
+
+                if (isset($allLoansKeyed[$key])) {
+                    // Has loan record
+                    $loanRecord = $allLoansKeyed[$key];
+                    $totalAmount = floatval($loanRecord->total_amount);
+
+                    // Decode payment details to calculate paid amount excluding credit
+                    $paymentDetails = $loanRecord->payment_details;
                     if (is_string($paymentDetails)) {
                         $paymentDetails = json_decode($paymentDetails, true);
                     }
+                    if (!is_array($paymentDetails)) {
+                        $paymentDetails = [];
+                    }
 
-                    // Calculate remaining amount (total - paid excluding credit)
                     $totalPaidExcludingCredit = $this->calculateTotalPaidExcludingCredit($paymentDetails);
                     $totalCreditAmount = $this->calculateTotalCreditAmount($paymentDetails);
                     $remainingAmount = max(0, $totalAmount - $totalPaidExcludingCredit);
 
-                    // Check if fully paid (remaining amount <= 0)
-                    if ($remainingAmount <= 0) {
-                        // Fully paid - FULLY SETTLED
-                        $completedBills[] = [
-                            'supplier_code' => $loan->code,
-                            'supplier_bill_no' => $loan->bill_no,
-                            'loan_amount' => $loanAmount,
-                            'total_amount' => $totalAmount,
-                            'total_paid_excluding_credit' => $totalPaidExcludingCredit,
-                            'total_credit_amount' => $totalCreditAmount,
-                            'remaining_amount' => $remainingAmount,
-                            'creditor_no' => $loan->Creditor_no,
-                            'date' => $loan->Date ?? null,
-                            'is_history' => true,
-                            'type' => $loan->type ?? null
-                        ];
-                    } else {
-                        // Still has remaining balance - NOT SETTLED (from history)
-                        // FIXED: Use original totalAmount instead of remainingAmount
-                        $pendingBills[] = [
-                            'supplier_code' => $loan->code,
-                            'supplier_bill_no' => $loan->bill_no,
-                            'loan_amount' => $loanAmount,
-                            'total_amount' => $totalAmount,  // FIXED: Use original total amount
-                            'total_paid_excluding_credit' => $totalPaidExcludingCredit,
-                            'total_credit_amount' => $totalCreditAmount,
-                            'remaining_amount' => $remainingAmount,
-                            'creditor_no' => $loan->Creditor_no,
-                            'date' => $loan->Date ?? null,
-                            'is_history' => true,
-                            'type' => $loan->type ?? null
-                        ];
-                    }
-                }
-
-                Log::info('History summary result', [
-                    'pending_count' => count($pendingBills),
-                    'completed_count' => count($completedBills),
-                    'total_history_records' => $allLoans->count()
-                ]);
-
-                return response()->json([
-                    'printed' => $completedBills,    // Fully settled from history
-                    'unprinted' => $pendingBills,     // Not settled from history
-                    'table_used' => $table,
-                    'date_filter_applied' => $isDateFiltered ? true : false,
-                    'total_loans_found' => $allLoans->count()
-                ]);
-
-            } else {
-                // For current table, use the original logic with sales matching
-                // Get all printed bills from sales table
-                $allPrintedBills = DB::table('sales')
-                    ->select('supplier_code', 'supplier_bill_no')
-                    ->whereNotNull('supplier_code')
-                    ->where('supplier_bill_printed', 'Y')
-                    ->whereNotNull('supplier_bill_no')
-                    ->where('supplier_bill_no', '!=', '')
-                    ->groupBy('supplier_code', 'supplier_bill_no')
-                    ->get()
-                    ->map(function ($item) {
-                        return [
-                            'supplier_code' => $item->supplier_code,
-                            'supplier_bill_no' => $item->supplier_bill_no
-                        ];
-                    });
-
-                Log::info('Found printed bills count', ['count' => $allPrintedBills->count()]);
-
-                // Get loans from current table
-                $query = DB::table($table)->select('code', 'bill_no', 'loan_amount', 'total_amount', 'Creditor_no', 'Date', 'type', 'payment_details');
-
-                $allLoans = $query->get();
-
-                Log::info('Current loans fetched', [
-                    'count' => $allLoans->count(),
-                    'sample' => $allLoans->take(5)->toArray()
-                ]);
-
-                // Create a keyed collection for faster lookup
-                $allLoansKeyed = $allLoans->keyBy(function ($item) {
-                    return $item->code . '|' . $item->bill_no;
-                });
-
-                // Separate: Pending = have loans with remaining balance > 0
-                $pendingBills = [];
-                $completedBills = [];
-
-                foreach ($allPrintedBills as $bill) {
-                    $key = $bill['supplier_code'] . '|' . $bill['supplier_bill_no'];
-
-                    if (isset($allLoansKeyed[$key])) {
-                        // Has loan record
-                        $loanRecord = $allLoansKeyed[$key];
-                        $totalAmount = floatval($loanRecord->total_amount);
-
-                        // Decode payment details to calculate paid amount excluding credit
-                        $paymentDetails = $loanRecord->payment_details;
-                        if (is_string($paymentDetails)) {
-                            $paymentDetails = json_decode($paymentDetails, true);
-                        }
-
-                        $totalPaidExcludingCredit = $this->calculateTotalPaidExcludingCredit($paymentDetails);
-                        $totalCreditAmount = $this->calculateTotalCreditAmount($paymentDetails);
-                        $remainingAmount = max(0, $totalAmount - $totalPaidExcludingCredit);
-
-                        if ($remainingAmount > 0) {
-                            // Still has remaining balance - NOT SETTLED
-                            // FIXED: Use original totalAmount instead of remainingAmount
-                            $pendingBills[] = [
-                                'supplier_code' => $bill['supplier_code'],
-                                'supplier_bill_no' => $bill['supplier_bill_no'],
-                                'loan_amount' => $totalPaidExcludingCredit,
-                                'total_amount' => $totalAmount,  // FIXED: Use original total amount
-                                'total_credit_amount' => $totalCreditAmount,
-                                'creditor_no' => $loanRecord->Creditor_no,
-                                'date' => $loanRecord->Date ?? null,
-                                'type' => $loanRecord->type ?? null
-                            ];
-                        } else {
-                            // Fully paid - FULLY SETTLED
-                            $completedBills[] = [
-                                'supplier_code' => $bill['supplier_code'],
-                                'supplier_bill_no' => $bill['supplier_bill_no'],
-                                'creditor_no' => $loanRecord->Creditor_no,
-                                'date' => $loanRecord->Date ?? null,
-                                'type' => $loanRecord->type ?? null
-                            ];
-                        }
-                    } else {
-                        // No loan record - means never paid, treat as pending with full amount
-                        $totalPayable = DB::table('sales')
-                            ->where('supplier_code', $bill['supplier_code'])
-                            ->where('supplier_bill_no', $bill['supplier_bill_no'])
-                            ->where('supplier_bill_printed', 'Y')
-                            ->sum('SupplierTotal');
-
+                    if ($remainingAmount > 0) {
+                        // Still has remaining balance - NOT SETTLED
                         $pendingBills[] = [
                             'supplier_code' => $bill['supplier_code'],
                             'supplier_bill_no' => $bill['supplier_bill_no'],
-                            'loan_amount' => 0,
-                            'total_amount' => floatval($totalPayable),
-                            'total_credit_amount' => 0,
-                            'creditor_no' => null,
-                            'date' => null,
-                            'type' => null
+                            'loan_amount' => $totalPaidExcludingCredit,
+                            'total_amount' => $totalAmount,
+                            'total_credit_amount' => $totalCreditAmount,
+                            'creditor_no' => $loanRecord->Creditor_no,
+                            'date' => $loanRecord->Date ?? null,
+                            'type' => $loanRecord->type ?? null,
+                            'payment_details' => $paymentDetails  // ✅ ADDED: Include payment details
+                        ];
+                    } else {
+                        // Fully paid - FULLY SETTLED
+                        $completedBills[] = [
+                            'supplier_code' => $bill['supplier_code'],
+                            'supplier_bill_no' => $bill['supplier_bill_no'],
+                            'loan_amount' => $totalPaidExcludingCredit,
+                            'total_amount' => $totalAmount,
+                            'total_credit_amount' => $totalCreditAmount,
+                            'creditor_no' => $loanRecord->Creditor_no,
+                            'date' => $loanRecord->Date ?? null,
+                            'type' => $loanRecord->type ?? null,
+                            'payment_details' => $paymentDetails  // ✅ ADDED: Include payment details
                         ];
                     }
+                } else {
+                    // No loan record - means never paid, treat as pending with full amount
+                    $totalPayable = DB::table('sales')
+                        ->where('supplier_code', $bill['supplier_code'])
+                        ->where('supplier_bill_no', $bill['supplier_bill_no'])
+                        ->where('supplier_bill_printed', 'Y')
+                        ->sum('SupplierTotal');
+
+                    $pendingBills[] = [
+                        'supplier_code' => $bill['supplier_code'],
+                        'supplier_bill_no' => $bill['supplier_bill_no'],
+                        'loan_amount' => 0,
+                        'total_amount' => floatval($totalPayable),
+                        'total_credit_amount' => 0,
+                        'creditor_no' => null,
+                        'date' => null,
+                        'type' => null,
+                        'payment_details' => []  // ✅ ADDED: Empty payment details
+                    ];
                 }
-
-                Log::info('Current summary result', [
-                    'pending_count' => count($pendingBills),
-                    'completed_count' => count($completedBills),
-                    'table_used' => $table
-                ]);
-
-                return response()->json([
-                    'printed' => $completedBills,
-                    'unprinted' => $pendingBills,
-                    'table_used' => $table,
-                    'date_filter_applied' => false,
-                    'total_loans_found' => $allLoans->count()
-                ]);
             }
 
-        } catch (\Exception $e) {
-            Log::error('Error in getSupplierLoansSummary: ' . $e->getMessage());
-            Log::error('Stack trace: ' . $e->getTraceAsString());
+            Log::info('Current summary result', [
+                'pending_count' => count($pendingBills),
+                'completed_count' => count($completedBills),
+                'table_used' => $table
+            ]);
+
             return response()->json([
-                'printed' => [],
-                'unprinted' => []
+                'printed' => $completedBills,
+                'unprinted' => $pendingBills,
+                'table_used' => $table,
+                'date_filter_applied' => false,
+                'total_loans_found' => $allLoans->count()
             ]);
         }
-    }
 
-    /**
-     * Get payment history with support for history table
-     */
+    } catch (\Exception $e) {
+        Log::error('Error in getSupplierLoansSummary: ' . $e->getMessage());
+        Log::error('Stack trace: ' . $e->getTraceAsString());
+        return response()->json([
+            'success' => false,
+            'message' => $e->getMessage(),
+            'printed' => [],
+            'unprinted' => []
+        ]);
+    }
+}
     public function getPaymentHistory(Request $request): JsonResponse
     {
         $code = $request->query('code');
