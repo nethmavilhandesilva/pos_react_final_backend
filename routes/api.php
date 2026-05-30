@@ -110,10 +110,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/suppliers/all-codes', [SupplierLoanController::class, 'getAllCodes']);
     Route::get('/suppliers/full-report', [SupplierLoanController::class, 'getFarmerFullReport']);
     Route::get('/suppliers/bill-status-summary', [SupplierController::class, 'getSupplierBillStatusSummary']);
-    
+
     // MAIN ROUTE for supplier loans summary - used by the frontend
     Route::get('/suppliers/supplierloans', [SupplierLoanController::class, 'getSupplierLoansSummary']);
-    
+
     // VIEW OLD BILLS ROUTE - alias that also uses getSupplierLoansSummary with use_history parameter
     Route::get('/suppliers/old-bills-summary', [SupplierLoanController::class, 'getSupplierLoansSummary']);
 
@@ -385,7 +385,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/creditors/supplier/{supplierCode}', [CreditorController::class, 'getSupplierCreditors']);
     Route::get('/creditors/pending/all', [CreditorController::class, 'getPendingCreditors']);
     Route::post('/creditors/create-with-supplier', [CreditorController::class, 'createCreditorWithSupplier']);
-    
+
     // Debtor and Creditor Report Routes
     Route::get('/debtor-creditor/combined', [DebtorCreditorController::class, 'getCombinedReport']);
     Route::get('/debtor-creditor/debtor/{code}', [DebtorCreditorController::class, 'getDebtorDetails']);
@@ -395,6 +395,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Add this inside the authenticated routes group
     Route::get('/sales/archived', [SalesEntryController::class, 'getArchivedSales']);
-  Route::put('/sales/update-customer-and-debtor', [SalesEntryController::class, 'updateCustomerAndDebtor']);
-    
+    Route::put('/sales/update-customer-and-debtor', [SalesEntryController::class, 'updateCustomerAndDebtor']);
+    // Add this line to your routes/api.php file
+    Route::get('/income-sources', [SalesEntryController::class, 'getIncomeSources']);
+    Route::get('/income-filter-options', [SalesEntryController::class, 'getIncomeFilterOptions']);
 });

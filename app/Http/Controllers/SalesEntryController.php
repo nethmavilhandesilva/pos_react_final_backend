@@ -2673,46 +2673,423 @@ class SalesEntryController extends Controller
         }
     }
     public function updateCustomerAndDebtor(Request $request)
-{
-    $request->validate([
-        'bill_no' => 'required|string',
-        'old_customer_code' => 'required|string',
-        'new_customer_code' => 'required|string',
-        'debtor_no' => 'nullable|string'
-    ]);
+    {
+        $request->validate([
+            'bill_no' => 'required|string',
+            'old_customer_code' => 'required|string',
+            'new_customer_code' => 'required|string',
+            'debtor_no' => 'nullable|string'
+        ]);
 
-    try {
-        // Update all sales records with the same bill_no
-        $updatedCount = Sale::where('bill_no', $request->bill_no)
-            ->where('customer_code', $request->old_customer_code)
-            ->update([
-                'customer_code' => $request->new_customer_code,
-                'Debtor_no' => $request->debtor_no
-            ]);
-
-        // Also update the debtor record if it exists
-        if ($request->debtor_no) {
-            // Update debtor table to link with new customer code
-            \App\Models\Debtor::where('bill_no', $request->bill_no)
+        try {
+            // Update all sales records with the same bill_no
+            $updatedCount = Sale::where('bill_no', $request->bill_no)
+                ->where('customer_code', $request->old_customer_code)
                 ->update([
                     'customer_code' => $request->new_customer_code,
                     'Debtor_no' => $request->debtor_no
                 ]);
+
+            // Also update the debtor record if it exists
+            if ($request->debtor_no) {
+                // Update debtor table to link with new customer code
+                \App\Models\Debtor::where('bill_no', $request->bill_no)
+                    ->update([
+                        'customer_code' => $request->new_customer_code,
+                        'Debtor_no' => $request->debtor_no
+                    ]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => "Customer code and debtor number updated successfully",
+                'updated_count' => $updatedCount,
+                'bill_no' => $request->bill_no,
+                'old_customer_code' => $request->old_customer_code,
+                'new_customer_code' => $request->new_customer_code,
+                'debtor_no' => $request->debtor_no
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update: ' . $e->getMessage()
+            ], 500);
         }
+    }
+  
+public function getIncomeSources(Request $request)
+{
+    try {
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
+        $uniqueCode = $request->input('unique_code');
+        $bankName = $request->input('bank_name');
+
+        $currentUser = auth()->user();
+
+        // Initialize totals
+        $totals = [
+            'cash' => 0,
+            'cheque' => 0,
+            'bank_transfer' => 0,
+            'bag_to_box' => 0,
+            'bill_to_bill' => 0,
+            'bad_debt' => 0,
+            'total_income' => 0,
+            'total_bills' => 0,
+            'total_customers' => 0
+        ];
+
+        $billsData = [];
+
+        // Helper function to process sales and extract payments from payment_history
+        $processSales = function ($sales, $source) use (&$totals, &$billsData) {
+            $salesByBill = [];
+
+            foreach ($sales as $sale) {
+                $billNo = $sale->bill_no;
+                $customerCode = $sale->customer_code ?? 'Unknown';
+                $key = $customerCode . '/' . $billNo;
+
+                if (!isset($salesByBill[$key])) {
+                    $salesByBill[$key] = [
+                        'customer_code' => $customerCode,
+                        'bill_no' => $billNo,
+                        'total_bill' => 0,
+                        'paid_amount' => 0,
+                        'cash' => 0,
+                        'cheque' => 0,
+                        'bank_transfer' => 0,
+                        'bag_to_box' => 0,
+                        'bill_to_bill' => 0,
+                        'bad_debt' => 0,
+                        'source' => $source
+                    ];
+                }
+
+                // Calculate bill total (total + pack costs)
+                $billTotal = (float) ($sale->total ?? 0) + ((float) ($sale->packs ?? 0) * (float) ($sale->CustomerPackCost ?? 0));
+                $salesByBill[$key]['total_bill'] += $billTotal;
+
+                // Get payments from payment_history JSON
+                $paymentHistory = [];
+                if ($sale->payment_history) {
+                    if (is_string($sale->payment_history)) {
+                        $paymentHistory = json_decode($sale->payment_history, true) ?: [];
+                    } elseif (is_array($sale->payment_history)) {
+                        $paymentHistory = $sale->payment_history;
+                    }
+                }
+
+                // Process payments from payment_history array
+                if (is_array($paymentHistory) && count($paymentHistory) > 0) {
+                    foreach ($paymentHistory as $payment) {
+                        $amount = (float) ($payment['amount'] ?? 0);
+                        $method = $payment['method'] ?? '';
+                        
+                        // DEBUG: Log to see what methods are actually stored
+                        \Log::info('Payment method found', [
+                            'bill_no' => $billNo,
+                            'customer' => $customerCode,
+                            'method' => $method,
+                            'amount' => $amount,
+                            'has_details' => isset($payment['details'])
+                        ]);
+                        
+                        if ($amount <= 0) continue;
+                        
+                        // CRITICAL FIX: Check both the method and details to determine payment type
+                        // A cheque payment should have cheque details
+                        // A bank transfer should have bank_account_id or transfer_reference
+                        $isActuallyCheque = false;
+                        $isActuallyBankTransfer = false;
+                        
+                        if ($method === 'Cheque' || ($method === 'Bank Transfer' && isset($payment['details']['cheq_no']))) {
+                            $isActuallyCheque = true;
+                        } elseif ($method === 'Bank Transfer' || ($method === 'Cheque' && isset($payment['details']['transfer_reference_no']))) {
+                            $isActuallyBankTransfer = true;
+                        }
+                        
+                        // Use the method as is, but log if there's a mismatch
+                        if (($method === 'Cheque' && isset($payment['details']['transfer_reference_no'])) ||
+                            ($method === 'Bank Transfer' && isset($payment['details']['cheq_no']))) {
+                            \Log::warning('Payment method mismatch', [
+                                'method' => $method,
+                                'details' => array_keys($payment['details'] ?? [])
+                            ]);
+                        }
+                        
+                        switch ($method) {
+                            case 'Cash':
+                                $salesByBill[$key]['cash'] += $amount;
+                                $salesByBill[$key]['paid_amount'] += $amount;
+                                $totals['cash'] += $amount;
+                                break;
+                            case 'Cheque':
+                                $salesByBill[$key]['cheque'] += $amount;
+                                $salesByBill[$key]['paid_amount'] += $amount;
+                                $totals['cheque'] += $amount;
+                                \Log::info('Added to Cheque total', ['amount' => $amount, 'new_total' => $totals['cheque']]);
+                                break;
+                            case 'Bank Transfer':
+                                $salesByBill[$key]['bank_transfer'] += $amount;
+                                $salesByBill[$key]['paid_amount'] += $amount;
+                                $totals['bank_transfer'] += $amount;
+                                \Log::info('Added to Bank Transfer total', ['amount' => $amount, 'new_total' => $totals['bank_transfer']]);
+                                break;
+                            case 'bag_to_box':
+                                $salesByBill[$key]['bag_to_box'] += $amount;
+                                $salesByBill[$key]['paid_amount'] += $amount;
+                                $totals['bag_to_box'] += $amount;
+                                break;
+                            case 'bill_to_bill':
+                                $salesByBill[$key]['bill_to_bill'] += $amount;
+                                $salesByBill[$key]['paid_amount'] += $amount;
+                                $totals['bill_to_bill'] += $amount;
+                                break;
+                            case 'bad_debt':
+                                $salesByBill[$key]['bad_debt'] += $amount;
+                                $salesByBill[$key]['paid_amount'] += $amount;
+                                $totals['bad_debt'] += $amount;
+                                break;
+                            case 'Credit':
+                                // SKIP CREDIT - NOT INCLUDED IN INCOME
+                                break;
+                            default:
+                                \Log::warning('Unknown payment method', ['method' => $method, 'amount' => $amount]);
+                                break;
+                        }
+                    }
+                } else {
+                    // Fallback: Use payment_adjustment_type and given_amount if payment_history is empty
+                    $paymentType = $sale->payment_adjustment_type ?? '';
+                    $givenAmount = (float) ($sale->given_amount ?? 0);
+                    $adjustmentAmount = (float) ($sale->adjustment_amount ?? 0);
+                    $badDebtAmount = (float) ($sale->bad_debt_amount ?? 0);
+                    
+                    if ($paymentType === 'Cash' && $givenAmount > 0) {
+                        $salesByBill[$key]['cash'] += $givenAmount;
+                        $salesByBill[$key]['paid_amount'] += $givenAmount;
+                        $totals['cash'] += $givenAmount;
+                    } elseif ($paymentType === 'Cheque' && $givenAmount > 0) {
+                        $salesByBill[$key]['cheque'] += $givenAmount;
+                        $salesByBill[$key]['paid_amount'] += $givenAmount;
+                        $totals['cheque'] += $givenAmount;
+                    } elseif ($paymentType === 'Bank Transfer' && $givenAmount > 0) {
+                        $salesByBill[$key]['bank_transfer'] += $givenAmount;
+                        $salesByBill[$key]['paid_amount'] += $givenAmount;
+                        $totals['bank_transfer'] += $givenAmount;
+                    } elseif ($paymentType === 'bag_to_box' && $adjustmentAmount > 0) {
+                        $salesByBill[$key]['bag_to_box'] += $adjustmentAmount;
+                        $salesByBill[$key]['paid_amount'] += $adjustmentAmount;
+                        $totals['bag_to_box'] += $adjustmentAmount;
+                    } elseif ($paymentType === 'bill_to_bill' && $adjustmentAmount > 0) {
+                        $salesByBill[$key]['bill_to_bill'] += $adjustmentAmount;
+                        $salesByBill[$key]['paid_amount'] += $adjustmentAmount;
+                        $totals['bill_to_bill'] += $adjustmentAmount;
+                    } elseif ($paymentType === 'bad_debt' && $badDebtAmount > 0) {
+                        $salesByBill[$key]['bad_debt'] += $badDebtAmount;
+                        $salesByBill[$key]['paid_amount'] += $badDebtAmount;
+                        $totals['bad_debt'] += $badDebtAmount;
+                    }
+                }
+            }
+
+            foreach ($salesByBill as $bill) {
+                $billsData[] = $bill;
+            }
+
+            $totals['total_bills'] += count($salesByBill);
+            $totals['total_customers'] += count(array_unique(array_column($salesByBill, 'customer_code')));
+        };
+
+        // Query current sales table
+        $currentSalesQuery = Sale::query();
+
+        // Apply UniqueCode filter
+        if ($uniqueCode && $uniqueCode !== 'all') {
+            $currentSalesQuery->where('UniqueCode', $uniqueCode);
+        }
+
+        // Apply Bank Name filter
+        if ($bankName && $bankName !== 'all') {
+            $currentSalesQuery->where(function($query) use ($bankName) {
+                $query->where('bank_name', $bankName)
+                      ->orWhereJsonContains('payment_history', ['details' => ['bank_name' => $bankName]]);
+            });
+        }
+
+        // Apply date filter if provided
+        if ($startDate) {
+            $currentSalesQuery->whereDate('created_at', '>=', $startDate);
+        }
+        if ($endDate) {
+            $currentSalesQuery->whereDate('created_at', '<=', $endDate);
+        }
+
+        $currentSales = $currentSalesQuery->get();
+        \Log::info('Current sales count: ' . $currentSales->count());
+        $processSales($currentSales, 'current');
+
+        // Query archived sales table
+        $archivedSalesQuery = SalesHistory::query();
+
+        // Apply UniqueCode filter
+        if ($uniqueCode && $uniqueCode !== 'all') {
+            $archivedSalesQuery->where('UniqueCode', $uniqueCode);
+        }
+
+        // Apply Bank Name filter
+        if ($bankName && $bankName !== 'all') {
+            $archivedSalesQuery->where(function($query) use ($bankName) {
+                $query->where('bank_name', $bankName)
+                      ->orWhereJsonContains('payment_history', ['details' => ['bank_name' => $bankName]]);
+            });
+        }
+
+        // Apply date filter if provided
+        if ($startDate) {
+            $archivedSalesQuery->whereDate('created_at', '>=', $startDate);
+        }
+        if ($endDate) {
+            $archivedSalesQuery->whereDate('created_at', '<=', $endDate);
+        }
+
+        $archivedSales = $archivedSalesQuery->get();
+        \Log::info('Archived sales count: ' . $archivedSales->count());
+        $processSales($archivedSales, 'archived');
+
+        // Log final totals before sending
+        \Log::info('FINAL TOTALS BEFORE RESPONSE', [
+            'cash' => $totals['cash'],
+            'cheque' => $totals['cheque'],
+            'bank_transfer' => $totals['bank_transfer'],
+            'bag_to_box' => $totals['bag_to_box'],
+            'bill_to_bill' => $totals['bill_to_bill'],
+            'bad_debt' => $totals['bad_debt']
+        ]);
+
+        // Calculate total income (EXCLUDING CREDIT)
+        $totals['total_income'] = $totals['cash'] + $totals['cheque'] + $totals['bank_transfer'] +
+            $totals['bag_to_box'] + $totals['bill_to_bill'] + $totals['bad_debt'];
 
         return response()->json([
             'success' => true,
-            'message' => "Customer code and debtor number updated successfully",
-            'updated_count' => $updatedCount,
-            'bill_no' => $request->bill_no,
-            'old_customer_code' => $request->old_customer_code,
-            'new_customer_code' => $request->new_customer_code,
-            'debtor_no' => $request->debtor_no
+            'data' => [
+                'totals' => $totals,
+                'bills' => $billsData,
+                'filters' => [
+                    'start_date' => $startDate,
+                    'end_date' => $endDate,
+                    'unique_code' => $uniqueCode,
+                    'bank_name' => $bankName
+                ]
+            ]
         ]);
+
     } catch (\Exception $e) {
+        \Log::error('Failed to get income sources: ' . $e->getMessage());
         return response()->json([
             'success' => false,
-            'message' => 'Failed to update: ' . $e->getMessage()
+            'message' => 'Failed to get income sources: ' . $e->getMessage()
+        ], 500);
+    }
+}
+public function getIncomeFilterOptions(Request $request)
+{
+    try {
+        // Get unique user codes from Sale table
+        $saleUsers = Sale::whereNotNull('UniqueCode')
+            ->where('UniqueCode', '!=', '')
+            ->select('UniqueCode')
+            ->distinct()
+            ->get()
+            ->pluck('UniqueCode')
+            ->toArray();
+
+        // Get unique user codes from SalesHistory table
+        $historyUsers = SalesHistory::whereNotNull('UniqueCode')
+            ->where('UniqueCode', '!=', '')
+            ->select('UniqueCode')
+            ->distinct()
+            ->get()
+            ->pluck('UniqueCode')
+            ->toArray();
+
+        // Merge and get unique values
+        $allUniqueCodes = array_unique(array_merge($saleUsers, $historyUsers));
+        sort($allUniqueCodes);
+
+        // Get unique bank names from payment_history in Sale table
+        $sales = Sale::all();
+        $bankNames = [];
+        
+        foreach ($sales as $sale) {
+            // Check direct bank_name field
+            if ($sale->bank_name) {
+                $bankNames[] = $sale->bank_name;
+            }
+            
+            // Check payment_history JSON
+            $paymentHistory = $sale->payment_history;
+            if (is_string($paymentHistory)) {
+                $paymentHistory = json_decode($paymentHistory, true);
+            }
+            
+            if (is_array($paymentHistory)) {
+                foreach ($paymentHistory as $payment) {
+                    // For cheque payments
+                    if (isset($payment['method']) && $payment['method'] === 'Cheque' && isset($payment['details']['bank_name'])) {
+                        $bankNames[] = $payment['details']['bank_name'];
+                    }
+                    // For bank transfer payments
+                    if (isset($payment['method']) && $payment['method'] === 'Bank Transfer' && isset($payment['details']['bank_account_id'])) {
+                        // You might need to fetch bank name from bank_account_id
+                        // For now, skip or add logic to get bank name
+                    }
+                }
+            }
+        }
+
+        // Also check archived sales
+        $archivedSales = SalesHistory::all();
+        foreach ($archivedSales as $sale) {
+            // Check direct bank_name field
+            if ($sale->bank_name) {
+                $bankNames[] = $sale->bank_name;
+            }
+            
+            // Check payment_history JSON
+            $paymentHistory = $sale->payment_history;
+            if (is_string($paymentHistory)) {
+                $paymentHistory = json_decode($paymentHistory, true);
+            }
+            
+            if (is_array($paymentHistory)) {
+                foreach ($paymentHistory as $payment) {
+                    if (isset($payment['method']) && $payment['method'] === 'Cheque' && isset($payment['details']['bank_name'])) {
+                        $bankNames[] = $payment['details']['bank_name'];
+                    }
+                }
+            }
+        }
+
+        $allBankNames = array_unique(array_filter($bankNames));
+        sort($allBankNames);
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'unique_codes' => $allUniqueCodes,
+                'bank_names' => $allBankNames
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        \Log::error('Failed to get filter options: ' . $e->getMessage());
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to get filter options: ' . $e->getMessage()  // Changed colon to arrow (=>)
         ], 500);
     }
 }
