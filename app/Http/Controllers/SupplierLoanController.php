@@ -1720,4 +1720,155 @@ class SupplierLoanController extends Controller
             ], 500);
         }
     }
+   public function getAdjustedTotal(Request $request)
+{
+    try {
+
+        \Log::info('===== getAdjustedTotal START =====');
+        \Log::info('Request Data', $request->all());
+
+        // Get total funds
+        $totalFunds = $request->input('total_funds', 0);
+
+        \Log::info('Total Funds Received', [
+            'total_funds' => $totalFunds
+        ]);
+
+        // Get all supplier loans
+        $supplierLoans = SupplierLoan::all();
+
+        \Log::info('Supplier Loans Retrieved', [
+            'count' => $supplierLoans->count()
+        ]);
+
+        $totalLoanAmount = 0;
+        $totalPaymentsExcludingCredit = 0;
+
+        foreach ($supplierLoans as $loan) {
+
+            \Log::info('Processing Loan', [
+                'loan_id' => $loan->id ?? null,
+                'loan_amount' => $loan->loan_amount ?? null
+            ]);
+
+            // Add loan amount
+            $totalLoanAmount += floatval($loan->loan_amount);
+
+            \Log::info('Running Loan Total', [
+                'current_total_loan_amount' => $totalLoanAmount
+            ]);
+
+            // Get payment details
+            $payments = $loan->payment_details;
+
+            \Log::info('Raw Payment Details', [
+                'loan_id' => $loan->id ?? null,
+                'payment_details' => $payments
+            ]);
+
+            // Decode JSON if needed
+            if (is_string($payments)) {
+
+                $payments = json_decode($payments, true);
+
+                \Log::info('JSON Decoded Payment Details', [
+                    'loan_id' => $loan->id ?? null,
+                    'json_error' => json_last_error_msg(),
+                    'decoded_data' => $payments
+                ]);
+            }
+
+            if (is_array($payments)) {
+
+                \Log::info('Payment Count', [
+                    'loan_id' => $loan->id ?? null,
+                    'payment_count' => count($payments)
+                ]);
+
+                foreach ($payments as $index => $payment) {
+
+                    \Log::info('Processing Payment', [
+                        'loan_id' => $loan->id ?? null,
+                        'payment_index' => $index,
+                        'payment_data' => $payment
+                    ]);
+
+                    if (
+                        isset($payment['method']) &&
+                        $payment['method'] !== 'Credit'
+                    ) {
+
+                        $amount = floatval($payment['amount'] ?? 0);
+
+                        $totalPaymentsExcludingCredit += $amount;
+
+                        \Log::info('Payment Included', [
+                            'loan_id' => $loan->id ?? null,
+                            'method' => $payment['method'],
+                            'amount' => $amount,
+                            'running_payment_total' => $totalPaymentsExcludingCredit
+                        ]);
+                    } else {
+
+                        \Log::info('Payment Skipped (Credit)', [
+                            'loan_id' => $loan->id ?? null,
+                            'payment_data' => $payment
+                        ]);
+                    }
+                }
+            } else {
+
+                \Log::warning('Payment Details Not Array', [
+                    'loan_id' => $loan->id ?? null,
+                    'payment_details_type' => gettype($payments)
+                ]);
+            }
+        }
+
+        $remainingAfterPayments =
+            $totalLoanAmount - $totalPaymentsExcludingCredit;
+
+        $adjustedAmount =
+            $remainingAfterPayments - floatval($totalFunds);
+
+        \Log::info('Final Calculation', [
+            'total_loan_amount' => $totalLoanAmount,
+            'total_payments_excluding_credit' => $totalPaymentsExcludingCredit,
+            'remaining_after_payments' => $remainingAfterPayments,
+            'total_funds' => $totalFunds,
+            'adjusted_amount_before_max' => $adjustedAmount,
+            'adjusted_amount_final' => max(0, $adjustedAmount)
+        ]);
+
+        \Log::info('===== getAdjustedTotal SUCCESS =====');
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'total_loan_amount' => $totalLoanAmount,
+                'total_payments_excluding_credit' => $totalPaymentsExcludingCredit,
+                'remaining_after_payments' => $remainingAfterPayments,
+                'total_funds' => floatval($totalFunds),
+                'adjusted_amount' => max(0, $adjustedAmount),
+                'message' => $adjustedAmount < 0
+                    ? 'Total Funds exceed remaining loan amount'
+                    : 'Calculation completed'
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+
+        \Log::error('===== getAdjustedTotal FAILED =====', [
+            'message' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'trace' => $e->getTraceAsString()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => $e->getMessage()
+        ], 500);
+    }
+}
 }

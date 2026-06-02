@@ -20,9 +20,10 @@ use App\Http\Controllers\CommissionController;
 use App\Models\Setting;
 use App\Http\Controllers\BankController;
 use App\Http\Controllers\DebtorController;
+use App\Http\Controllers\CashierBalanceController;
 
 // ----------------------------------------------------------------------
-// 🚨 PUBLIC ROUTES (No Authentication Required) 🚨
+// ðŸš¨ PUBLIC ROUTES (No Authentication Required) ðŸš¨
 // ----------------------------------------------------------------------
 
 // AUTH
@@ -73,7 +74,7 @@ Route::get('/public/supplier-bill/{token}', function ($token) {
 });
 
 // ----------------------------------------------------------------------
-// ✅ PROTECTED ROUTES (Requires 'auth:sanctum') 
+// âœ… PROTECTED ROUTES (Requires 'auth:sanctum') 
 // ----------------------------------------------------------------------
 Route::middleware('auth:sanctum')->group(function () {
 
@@ -105,19 +106,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('items/search/{query}', [ItemController::class, 'search']);
 
     // ==================== SUPPLIER ROUTES ====================
-    // 🔴 CRITICAL: These specific routes MUST come BEFORE Route::apiResource
+    // ðŸ”´ CRITICAL: These specific routes MUST come BEFORE Route::apiResource
     Route::get('/suppliers/loan-summary', [SupplierLoanController::class, 'getLoanSummary']);
     Route::get('/suppliers/all-codes', [SupplierLoanController::class, 'getAllCodes']);
     Route::get('/suppliers/full-report', [SupplierLoanController::class, 'getFarmerFullReport']);
     Route::get('/suppliers/bill-status-summary', [SupplierController::class, 'getSupplierBillStatusSummary']);
-
+    
     // MAIN ROUTE for supplier loans summary - used by the frontend
     Route::get('/suppliers/supplierloans', [SupplierLoanController::class, 'getSupplierLoansSummary']);
-
+    
     // VIEW OLD BILLS ROUTE - alias that also uses getSupplierLoansSummary with use_history parameter
     Route::get('/suppliers/old-bills-summary', [SupplierLoanController::class, 'getSupplierLoansSummary']);
 
-    // ✅ CRITICAL: This route MUST come BEFORE any wildcard routes like /suppliers/{supplierCode}
+    // âœ… CRITICAL: This route MUST come BEFORE any wildcard routes like /suppliers/{supplierCode}
     Route::get('/suppliers/by-letter', [SupplierLoanController::class, 'getSuppliersByLetter']);
 
     Route::get('/suppliers/{supplierCode}/details', [SupplierController::class, 'getSupplierDetails']);
@@ -126,7 +127,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/suppliers/unprinted-details/{supplierCode}', [SupplierLoanController::class, 'getUnprintedDetails']);
     Route::get('/suppliers/with-bills', [SupplierController::class, 'getSuppliersWithBills']);
 
-    // ✅ CRITICAL CUSTOM ROUTES - MUST BE BEFORE apiResource
+    // âœ… CRITICAL CUSTOM ROUTES - MUST BE BEFORE apiResource
     Route::put('/suppliers/update-creditor-status', [SupplierController::class, 'updateCreditorStatus']);
     Route::get('/suppliers/check-supplier/{code}', [SupplierController::class, 'checkSupplierExists']);
     Route::get('/suppliers/creditor-status/{code}', [SupplierController::class, 'getCreditorStatus']);
@@ -303,6 +304,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // ==================== SUPPLIER LOAN ROUTES (CRITICAL: Order matters!) ====================
     // IMPORTANT: These specific routes should come before any wildcard routes
+    Route::get('/supplier-loans/adjusted-total', [SupplierLoanController::class, 'getAdjustedTotal']);
     Route::get('/supplier-loan/search', [SupplierLoanController::class, 'findLoan']);
     Route::get('/supplier-loan/payment-history', [SupplierLoanController::class, 'getPaymentHistory']);
     Route::get('/supplier-loan/supplier/{code}', [SupplierLoanController::class, 'getBySupplier']);
@@ -385,7 +387,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/creditors/supplier/{supplierCode}', [CreditorController::class, 'getSupplierCreditors']);
     Route::get('/creditors/pending/all', [CreditorController::class, 'getPendingCreditors']);
     Route::post('/creditors/create-with-supplier', [CreditorController::class, 'createCreditorWithSupplier']);
-
+    
     // Debtor and Creditor Report Routes
     Route::get('/debtor-creditor/combined', [DebtorCreditorController::class, 'getCombinedReport']);
     Route::get('/debtor-creditor/debtor/{code}', [DebtorCreditorController::class, 'getDebtorDetails']);
@@ -395,8 +397,17 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Add this inside the authenticated routes group
     Route::get('/sales/archived', [SalesEntryController::class, 'getArchivedSales']);
-    Route::put('/sales/update-customer-and-debtor', [SalesEntryController::class, 'updateCustomerAndDebtor']);
-    // Add this line to your routes/api.php file
+  Route::put('/sales/update-customer-and-debtor', [SalesEntryController::class, 'updateCustomerAndDebtor']);
+ // Add this line to your routes/api.php file
     Route::get('/income-sources', [SalesEntryController::class, 'getIncomeSources']);
     Route::get('/income-filter-options', [SalesEntryController::class, 'getIncomeFilterOptions']);
+    //cashbalance routes
+    Route::prefix('cashier-balance')->group(function () {
+        Route::post('/record-payment', [CashierBalanceController::class, 'recordPayment']);
+        Route::get('/balance', [CashierBalanceController::class, 'getBalance']);
+        Route::get('/detailed-balance', [CashierBalanceController::class, 'getDetailedBalance']);
+     Route::post('/allocate-funds', [CashierBalanceController::class, 'allocateFunds']); // NEW
+    Route::get('/allocated-funds', [CashierBalanceController::class, 'getAllocatedFunds']); // NEW
+    Route::get('/bank-list', [CashierBalanceController::class, 'getBankList']); // NEW
+    });
 });
